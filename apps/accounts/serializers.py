@@ -1,25 +1,21 @@
 from rest_framework import serializers
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
+from django.contrib.auth import get_user_model
 from django.contrib.auth.password_validation import validate_password
-from .models import User
+from django.core.exceptions import ValidationError
+
+User = get_user_model()
 
 
-class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
-    """JWT login — retourne access + refresh + infos utilisateur."""
+class UserSerializer(serializers.ModelSerializer):
+    """Sérialiseur de base pour les infos utilisateur (sans le mot de passe)."""
 
-    def validate(self, attrs):
-        data = super().validate(attrs)
-        data['user'] = {
-            'id':         self.user.id,
-            'email':      self.user.email,
-            'username':   self.user.username,
-            'first_name': self.user.first_name,
-            'last_name':  self.user.last_name,
-            'role':       self.user.role,
-            'role_label': self.user.get_role_display(),
-            'avatar':     self.user.avatar.url if self.user.avatar else None,
-        }
-        return data
+    role_label = serializers.CharField(source='get_role_display', read_only=True)
+
+    class Meta:
+        model = User
+        fields = ['id', 'nom', 'prenom', 'email', 'role', 'role_label', 'actif', 'date_joined']
+        read_only_fields = ['id', 'date_joined']
 
 
 class RegisterSerializer(serializers.ModelSerializer):
@@ -30,33 +26,27 @@ class RegisterSerializer(serializers.ModelSerializer):
         validators=[validate_password],
         style={'input_type': 'password'}
     )
-    password2 = serializers.CharField(
+    password_confirm = serializers.CharField(
         write_only=True, required=True,
-        label='Confirmation du mot de passe',
         style={'input_type': 'password'}
     )
 
     class Meta:
         model = User
-        fields = [
-            'email', 'username', 'first_name', 'last_name',
-            'role', 'phone', 'password', 'password2',
-        ]
+        fields = ['nom', 'prenom', 'email', 'role', 'password', 'password_confirm']
         extra_kwargs = {
-            'first_name': {'required': True},
-            'last_name':  {'required': True},
-            'role':       {'required': True},
+            'role': {'required': False, 'default': User.Role.OPERATEUR},
         }
 
     def validate(self, attrs):
-        if attrs['password'] != attrs['password2']:
+        if attrs['password'] != attrs['password_confirm']:
             raise serializers.ValidationError(
-                {'password': 'Les mots de passe ne correspondent pas.'}
+                {'password_confirm': 'Les mots de passe ne correspondent pas.'}
             )
         return attrs
 
     def create(self, validated_data):
-        validated_data.pop('password2')
+        validated_data.pop('password_confirm')
         password = validated_data.pop('password')
         user = User(**validated_data)
         user.set_password(password)
@@ -64,38 +54,76 @@ class RegisterSerializer(serializers.ModelSerializer):
         return user
 
 
-class UserProfileSerializer(serializers.ModelSerializer):
-    """Profil utilisateur — lecture et modification partielle."""
-
-    role_label = serializers.CharField(source='get_role_display', read_only=True)
-    avatar_url = serializers.SerializerMethodField()
-
-    class Meta:
-        model = User
-        fields = [
-            'id', 'email', 'username', 'first_name', 'last_name',
-            'role', 'role_label', 'phone', 'avatar', 'avatar_url',
-            'date_joined', 'last_login',
-        ]
-        read_only_fields = ['id', 'email', 'role', 'date_joined', 'last_login']
-
-    def get_avatar_url(self, obj):
-        request = self.context.get('request')
-        if obj.avatar and request:
-            return request.build_absolute_uri(obj.avatar.url)
-        return None
-
-
-class ChangePasswordSerializer(serializers.Serializer):
-    """Changement de mot de passe."""
-
-    old_password  = serializers.CharField(required=True, style={'input_type': 'password'})
-    new_password  = serializers.CharField(required=True, validators=[validate_password], style={'input_type': 'password'})
-    new_password2 = serializers.CharField(required=True, style={'input_type': 'password'})
+class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
+    """JWT login — retourne access + refresh + infos utilisateur."""
 
     def validate(self, attrs):
-        if attrs['new_password'] != attrs['new_password2']:
+        from django.contrib.auth import authenticate
+        from rest_framework.exceptions import AuthenticationFailed
+
+        email = attrs.get('email', '').lower()
+        password = attrs.get('password', '')
+
+        # Vérifier si le compte existe et est inactif avant d'appeler super()
+        try:
+            user = User.objects.get(email=email)
+            if not user.actif and user.check_password(password):
+                raise AuthenticationFailed(
+                    'inactive_account',
+                    code='inactive_account'
+                )
+        except User.DoesNotExist:
+            pass
+
+        data = super().validate(attrs)
+        data['user'] = {
+            'id': self.user.id,
+            'nom': self.user.nom,
+            'prenom': self.user.prenom,
+            'email': self.user.email,
+            'role': self.user.role,
+            'role_label': self.user.get_role_display(),
+        }
+        return data
+
+    @classmethod
+    def get_token(cls, user):
+        token = super().get_token(user)
+        token['role'] = user.role
+        token['email'] = user.email
+        return token
+
+
+class PasswordResetSerializer(serializers.Serializer):
+    """Demande de réinitialisation de mot de passe."""
+
+    email = serializers.EmailField(required=True)
+
+
+class PasswordResetConfirmSerializer(serializers.Serializer):
+    """Confirmation de réinitialisation de mot de passe."""
+
+    uid = serializers.CharField(required=True)
+    token = serializers.CharField(required=True)
+    new_password = serializers.CharField(
+        write_only=True, required=True,
+        validators=[validate_password],
+        style={'input_type': 'password'}
+    )
+    new_password_confirm = serializers.CharField(
+        write_only=True, required=True,
+        style={'input_type': 'password'}
+    )
+
+    def validate(self, attrs):
+        if attrs['new_password'] != attrs['new_password_confirm']:
             raise serializers.ValidationError(
-                {'new_password': 'Les mots de passe ne correspondent pas.'}
+                {'new_password_confirm': 'Les mots de passe ne correspondent pas.'}
             )
         return attrs
+
+
+class LogoutSerializer(serializers.Serializer):
+    """Corps de la requête de déconnexion : le refresh token à révoquer."""
+
+    refresh = serializers.CharField(required=True)
