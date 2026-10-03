@@ -28,6 +28,7 @@ THIRD_PARTY_APPS = [
 ]
 LOCAL_APPS = [
     'apps.accounts',
+    'apps.equipements',
 ]
 INSTALLED_APPS = DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS
 
@@ -105,6 +106,12 @@ STATIC_URL = '/static/'
 STATIC_ROOT = BASE_DIR / 'staticfiles'
 MEDIA_URL = '/media/'
 MEDIA_ROOT = BASE_DIR / 'media'
+
+# ─── Module 4 — Inspection visuelle par IA ───────────────────────────────────
+# Backend du service d'analyse (remplaçable : 'mock' par défaut).
+VISION_AI_BACKEND = config('VISION_AI_BACKEND', default='mock')
+# Taille maximale acceptée pour une image d'inspection (Mo).
+INSPECTION_IMAGE_MAX_MB = config('INSPECTION_IMAGE_MAX_MB', default=5, cast=int)
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
@@ -187,6 +194,46 @@ DEFAULT_FROM_EMAIL = formataddr((EMAIL_DISPLAY_NAME, config('DEFAULT_FROM_EMAIL'
 
 # ─── Frontend URL (liens de réinitialisation) ─────────────────────────────────
 FRONTEND_URL = config('FRONTEND_URL', default='http://localhost:3000')
+
+# ─── Logo base64 pour les emails ─────────────────────────────────────────────
+import base64 as _b64, os as _os
+_logo_candidates = [
+    _os.path.join(BASE_DIR, 'staticfiles', 'logoSmart.png'),
+    _os.path.join(BASE_DIR, 'staticfiles', 'logo_b64.txt'),
+    _os.path.join(BASE_DIR, '.logo_b64.txt'),
+    _os.path.join(BASE_DIR.parent, 'Smartfactory-frontend', 'src', 'assets', 'logoSmart.png'),
+]
+EMAIL_LOGO_B64 = ''
+for _p in _logo_candidates:
+    if _os.path.exists(_p):
+        if _p.endswith('.txt'):
+            try:
+                with open(_p, 'r', encoding='utf-8') as _f:
+                    EMAIL_LOGO_B64 = _f.read().strip()
+                if EMAIL_LOGO_B64:
+                    break
+            except Exception:
+                pass
+        else:
+            try:
+                from PIL import Image as _Img
+                import io as _io
+                _img = _Img.open(_p).convert('RGBA')
+                _img = _img.resize((80, 80), _Img.LANCZOS)
+                _buf = _io.BytesIO()
+                _img.save(_buf, format='PNG', optimize=True)
+                EMAIL_LOGO_B64 = _b64.b64encode(_buf.getvalue()).decode()
+                if EMAIL_LOGO_B64:
+                    break
+            except Exception:
+                try:
+                    with open(_p, 'rb') as _f:
+                        EMAIL_LOGO_B64 = _b64.b64encode(_f.read()).decode()
+                    if EMAIL_LOGO_B64:
+                        break
+                except Exception:
+                    pass
+
 
 # ─── Réinitialisation de mot de passe ────────────────────────────────────────
 # Durée de validité du token de réinitialisation : 1 heure (3600 secondes)

@@ -87,3 +87,13 @@ class Utilisateur(AbstractBaseUser, PermissionsMixin):
     @property
     def is_operateur(self):
         return self.role == self.Role.OPERATEUR
+
+    @property
+    def is_temp_password_expired(self):
+        """Vérifie si le mot de passe temporaire a dépassé le délai de 48 heures."""
+        if self.must_reset_password and self.date_joined:
+            from django.utils import timezone
+            from datetime import timedelta
+            return (timezone.now() - self.date_joined) > timedelta(hours=48)
+        return False
+
