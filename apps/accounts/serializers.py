@@ -1,4 +1,5 @@
 from rest_framework import serializers
+from rest_framework import serializers
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 from django.contrib.auth import get_user_model
 from django.contrib.auth.password_validation import validate_password
@@ -11,10 +12,21 @@ class UserSerializer(serializers.ModelSerializer):
     """Sérialiseur de base pour les infos utilisateur (sans le mot de passe)."""
 
     role_label = serializers.CharField(source='get_role_display', read_only=True)
+    photo = serializers.SerializerMethodField()
 
     class Meta:
         model = User
-        fields = ['id', 'nom', 'prenom', 'email', 'role', 'role_label', 'actif', 'date_joined']
+        fields = ['id', 'nom', 'prenom', 'email', 'role', 'role_label',
+                  'actif', 'telephone', 'photo', 'date_joined']
+        read_only_fields = ['id', 'date_joined']
+
+    def get_photo(self, obj):
+        """Retourne l'URL relative de la photo (le proxy Vite /media → localhost:8000/media)."""
+        if not obj.photo:
+            return None
+        return obj.photo.url  # ex: /media/profiles/photo.jpg
+        fields = ['id', 'nom', 'prenom', 'email', 'role', 'role_label',
+                  'actif', 'telephone', 'photo', 'date_joined']
         read_only_fields = ['id', 'date_joined']
 
 
@@ -127,3 +139,88 @@ class LogoutSerializer(serializers.Serializer):
     """Corps de la requête de déconnexion : le refresh token à révoquer."""
 
     refresh = serializers.CharField(required=True)
+
+
+class AdminUserCreateSerializer(serializers.ModelSerializer):
+    """Création d'un utilisateur par un ADMIN (mot de passe généré automatiquement)."""
+
+    class Meta:
+        model = User
+        fields = ['nom', 'prenom', 'email', 'role']
+        extra_kwargs = {
+            'role': {'required': False, 'default': User.Role.OPERATEUR},
+        }
+
+
+class AdminUserListSerializer(serializers.ModelSerializer):
+    """Sérialiseur lecture pour la liste des utilisateurs (ADMIN)."""
+
+    role_label = serializers.CharField(source='get_role_display', read_only=True)
+
+    class Meta:
+        model = User
+        fields = ['id', 'nom', 'prenom', 'email', 'role', 'role_label',
+                  'actif', 'telephone', 'photo', 'must_reset_password',
+                  'date_joined', 'last_login']
+        read_only_fields = fields
+
+
+class UpdateProfileSerializer(serializers.ModelSerializer):
+    """Mise à jour du profil utilisateur connecté (nom, prénom, téléphone, photo)."""
+
+    photo = serializers.ImageField(required=False, allow_null=True)
+
+    class Meta:
+        model = User
+        fields = ['nom', 'prenom', 'telephone', 'photo']
+
+    def validate_nom(self, value: str) -> str:
+        if not value.strip():
+            raise serializers.ValidationError('Le nom ne peut pas être vide.')
+        return value.strip()
+
+    def validate_prenom(self, value: str) -> str:
+        if not value.strip():
+            raise serializers.ValidationError('Le prénom ne peut pas être vide.')
+        return value.strip()
+
+    def validate_telephone(self, value: str) -> str:
+        """Validation souple : chiffres, espaces, +, tirets, parenthèses autorisés."""
+        import re
+        cleaned = value.strip()
+        if cleaned and not re.match(r'^[\d\s\+\-\(\)]{6,20}$', cleaned):
+            raise serializers.ValidationError(
+                'Format invalide. Ex: +213 555 123 456 ou 0555123456.'
+            )
+        return cleaned
+
+
+class ChangePasswordSerializer(serializers.Serializer):
+    """Changement de mot de passe direct (sans token) pour un utilisateur connecté."""
+
+    current_password = serializers.CharField(
+        write_only=True, required=True,
+        style={'input_type': 'password'}
+    )
+    new_password = serializers.CharField(
+        write_only=True, required=True,
+        validators=[validate_password],
+        style={'input_type': 'password'}
+    )
+    new_password_confirm = serializers.CharField(
+        write_only=True, required=True,
+        style={'input_type': 'password'}
+    )
+
+    def validate_current_password(self, value: str) -> str:
+        user = self.context['request'].user
+        if not user.check_password(value):
+            raise serializers.ValidationError('Mot de passe actuel incorrect.')
+        return value
+
+    def validate(self, attrs):
+        if attrs['new_password'] != attrs['new_password_confirm']:
+            raise serializers.ValidationError(
+                {'new_password_confirm': 'Les mots de passe ne correspondent pas.'}
+            )
+        return attrs

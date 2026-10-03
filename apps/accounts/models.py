@@ -44,6 +44,15 @@ class Utilisateur(AbstractBaseUser, PermissionsMixin):
         verbose_name='Rôle'
     )
     actif = models.BooleanField(default=True, verbose_name='Actif')
+    must_reset_password = models.BooleanField(
+        default=False, verbose_name='Doit réinitialiser son mot de passe'
+    )
+    telephone = models.CharField(
+        max_length=20, blank=True, default='', verbose_name='Numéro de téléphone'
+    )
+    photo = models.ImageField(
+        upload_to='profiles/', null=True, blank=True, verbose_name='Photo de profil'
+    )
 
     is_staff = models.BooleanField(default=False)
     is_superuser = models.BooleanField(default=False)
