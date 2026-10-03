@@ -85,12 +85,15 @@ class TestRegister:
         assert response.data['role'] == 'OPERATEUR'
 
     def test_register_admin_can_create_admin(self, api_client, user_data, admin_user):
+        # La règle métier interdit un 2ème ADMIN — l'admin doit utiliser /auth/users/ pour créer des utilisateurs
+        # Ce test vérifie que la tentative de créer un 2ème ADMIN via /register/ retourne 400
         api_client.force_authenticate(user=admin_user)
         user_data['role'] = 'ADMIN'
         url = reverse('auth-register')
         response = api_client.post(url, user_data, format='json')
-        assert response.status_code == 201
-        assert response.data['role'] == 'ADMIN'
+        # Un seul ADMIN est autorisé — 400 attendu
+        assert response.status_code == 400
+        assert 'administrateur' in str(response.data).lower() or 'admin' in str(response.data).lower()
 
 
 # ─── LOGIN ───────────────────────────────────────────────────────────────────
@@ -465,6 +468,12 @@ class TestAdminCreateUser:
 class TestAdminListUsers:
     def test_admin_can_list_users(self, api_client, admin_user, regular_user):
         api_client.force_authenticate(user=admin_user)
+        # Créer un 2ème utilisateur non-admin pour s'assurer d'avoir >= 2 dans la liste
+        # (admin_user est exclu de sa propre liste par la vue)
+        User.objects.create_user(
+            email='extra@example.com', password='Extra@123456',
+            nom='Extra', prenom='User', role=User.Role.TECHNICIEN,
+        )
         url = reverse('admin-list-users')
         response = api_client.get(url)
         assert response.status_code == 200
@@ -497,11 +506,13 @@ class TestAdminListUsers:
         roles = [u['role'] for u in response.data['results']]
         assert all(r == 'OPERATEUR' for r in roles)
 
-    def test_response_contains_expected_fields(self, api_client, admin_user):
+    def test_response_contains_expected_fields(self, api_client, admin_user, regular_user):
         api_client.force_authenticate(user=admin_user)
         url = reverse('admin-list-users')
         response = api_client.get(url)
         assert response.status_code == 200
+        # regular_user est dans la liste (admin est exclu de sa propre liste)
+        assert response.data['count'] >= 1
         user_data = response.data['results'][0]
         for field in ['id', 'nom', 'prenom', 'email', 'role', 'role_label', 'actif', 'must_reset_password']:
             assert field in user_data
@@ -650,3 +661,144 @@ class TestChangePassword:
         refresh_url = reverse('token-refresh')
         response = api_client.post(refresh_url, {'refresh': str(refresh)}, format='json')
         assert response.status_code == 401
+
+
+# ─── Tests Nouveaux : Logo Email, 48h Expiration, Rôles Restreints ───────────
+
+@pytest.mark.django_db
+class TestUserCreationAnd48hExpiration:
+    def test_admin_create_user_sets_inactive_by_default(self, api_client, admin_user):
+        api_client.force_authenticate(user=admin_user)
+        create_url = reverse('admin-create-user')
+        response = api_client.post(create_url, {
+            'nom': 'Nouveau', 'prenom': 'Technicien',
+            'email': 'tech.new@example.com', 'role': 'TECHNICIEN',
+        }, format='json')
+        assert response.status_code == 201
+
+        created_user = User.objects.get(email='tech.new@example.com')
+        # Inactif par défaut jusqu'au premier login
+        assert created_user.actif is False
+        assert created_user.must_reset_password is True
+
+    def test_admin_cannot_create_admin_user(self, api_client, admin_user):
+        api_client.force_authenticate(user=admin_user)
+        create_url = reverse('admin-create-user')
+        response = api_client.post(create_url, {
+            'nom': 'Deuxieme', 'prenom': 'Admin',
+            'email': 'admin2@example.com', 'role': 'ADMIN',
+        }, format='json')
+        assert response.status_code == 400
+        assert 'error' in response.data
+
+    def test_email_contains_logo_and_48h_warning(self, api_client, admin_user):
+        api_client.force_authenticate(user=admin_user)
+        create_url = reverse('admin-create-user')
+        api_client.post(create_url, {
+            'nom': 'Test', 'prenom': 'Logo',
+            'email': 'logo.test@example.com', 'role': 'OPERATEUR',
+        }, format='json')
+
+        assert len(mail.outbox) >= 1
+        last_email = mail.outbox[-1]
+        assert '48 heures' in last_email.body or '48 heures' in last_email.alternatives[0][0]
+        # Le logo est référencé via CID et joint en pièce inline (fiable Gmail/Outlook),
+        # et non plus en data-URI (bloqué par la plupart des clients mail).
+        html_content = last_email.alternatives[0][0]
+        assert 'cid:smartfactory-logo' in html_content
+        assert 'data:image/png;base64,' not in html_content
+        assert last_email.mixed_subtype == 'related'
+        content_ids = [att.get('Content-ID') for att in last_email.attachments]
+        assert '<smartfactory-logo>' in content_ids
+
+    def test_login_within_48h_allows_first_login_reset(self, api_client, admin_user):
+        api_client.force_authenticate(user=admin_user)
+        create_url = reverse('admin-create-user')
+        api_client.post(create_url, {
+            'nom': 'Operateur', 'prenom': 'Samir',
+            'email': 'samir@example.com', 'role': 'OPERATEUR',
+        }, format='json')
+        api_client.force_authenticate(user=None)
+
+        body = mail.outbox[-1].body
+        temp_password = body.split('Mot de passe temporaire : ')[1].split('\n')[0]
+
+        login_url = reverse('auth-login')
+        response = api_client.post(login_url, {
+            'email': 'samir@example.com',
+            'password': temp_password,
+        }, format='json')
+        assert response.status_code == 200
+        assert response.data['must_reset_password'] is True
+        assert 'uid' in response.data
+        assert 'token' in response.data
+
+    def test_password_reset_activates_user_account(self, api_client, admin_user):
+        api_client.force_authenticate(user=admin_user)
+        create_url = reverse('admin-create-user')
+        api_client.post(create_url, {
+            'nom': 'Operateur', 'prenom': 'Karim',
+            'email': 'karim@example.com', 'role': 'OPERATEUR',
+        }, format='json')
+        api_client.force_authenticate(user=None)
+
+        body = mail.outbox[-1].body
+        temp_password = body.split('Mot de passe temporaire : ')[1].split('\n')[0]
+
+        login_url = reverse('auth-login')
+        login_resp = api_client.post(login_url, {
+            'email': 'karim@example.com',
+            'password': temp_password,
+        }, format='json')
+        uid = login_resp.data['uid']
+        token = login_resp.data['token']
+
+        confirm_url = reverse('password-reset-confirm')
+        confirm_resp = api_client.post(confirm_url, {
+            'uid': uid, 'token': token,
+            'new_password': 'MonNouveauPass123!',
+            'new_password_confirm': 'MonNouveauPass123!',
+        }, format='json')
+        assert confirm_resp.status_code == 200
+
+        # L'utilisateur doit maintenant être ACTIF
+        user = User.objects.get(email='karim@example.com')
+        assert user.actif is True
+        assert user.must_reset_password is False
+
+        # Le login suivant avec le nouveau mot de passe fonctionne et renvoie le JWT
+        normal_login = api_client.post(login_url, {
+            'email': 'karim@example.com',
+            'password': 'MonNouveauPass123!',
+        }, format='json')
+        assert normal_login.status_code == 200
+        assert 'access' in normal_login.data
+
+    def test_login_after_48h_is_rejected_as_inactive(self, api_client, admin_user):
+        from django.utils import timezone
+        from datetime import timedelta
+
+        api_client.force_authenticate(user=admin_user)
+        create_url = reverse('admin-create-user')
+        api_client.post(create_url, {
+            'nom': 'Late', 'prenom': 'User',
+            'email': 'late@example.com', 'role': 'TECHNICIEN',
+        }, format='json')
+        api_client.force_authenticate(user=None)
+
+        body = mail.outbox[-1].body
+        temp_password = body.split('Mot de passe temporaire : ')[1].split('\n')[0]
+
+        # Simuler 50 heures écoulées depuis la création
+        user = User.objects.get(email='late@example.com')
+        user.date_joined = timezone.now() - timedelta(hours=50)
+        user.save(update_fields=['date_joined'])
+
+        login_url = reverse('auth-login')
+        response = api_client.post(login_url, {
+            'email': 'late@example.com',
+            'password': temp_password,
+        }, format='json')
+        assert response.status_code == 403
+        assert '48 heures' in response.data['error']
+

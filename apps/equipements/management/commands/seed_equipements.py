@@ -15,8 +15,8 @@ class Command(BaseCommand):
 
         # ── Zones (2) ─────────────────────────────────────────────────────────
         zones_data = [
-            {'nom': 'Zone A – Assemblage', 'description': 'Zone dédiée à l'assemblage'},
-            {'nom': 'Zone B – Peinture',   'description': 'Zone dédiée à la peinture'},
+            {'nom': 'Zone A - Assemblage', 'description': "Zone dediee a l'assemblage"},
+            {'nom': 'Zone B - Peinture',   'description': "Zone dediee a la peinture"},
         ]
         zones = []
         for zd in zones_data:

@@ -17,17 +17,14 @@ class UserSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
         fields = ['id', 'nom', 'prenom', 'email', 'role', 'role_label',
-                  'actif', 'telephone', 'photo', 'date_joined']
-        read_only_fields = ['id', 'date_joined']
+                  'actif', 'telephone', 'photo', 'date_joined', 'must_reset_password']
+        read_only_fields = ['id', 'date_joined', 'must_reset_password']
 
     def get_photo(self, obj):
         """Retourne l'URL relative de la photo (le proxy Vite /media → localhost:8000/media)."""
         if not obj.photo:
             return None
         return obj.photo.url  # ex: /media/profiles/photo.jpg
-        fields = ['id', 'nom', 'prenom', 'email', 'role', 'role_label',
-                  'actif', 'telephone', 'photo', 'date_joined']
-        read_only_fields = ['id', 'date_joined']
 
 
 class RegisterSerializer(serializers.ModelSerializer):
