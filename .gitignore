@@ -1,13 +1,59 @@
+# Python
 __pycache__/
 *.py[cod]
 *.pyo
 *.pyd
+*.pyc
+*.pdb
+
+# Environnement virtuel
 .env
-*.sqlite3
-media/
-staticfiles/
 .venv/
 venv/
 env/
+ENV/
+
+# Base de données SQLite (dev local)
+*.sqlite3
+db.sqlite3
+
+# Fichiers médias uploadés (non versionnés)
+media/
+
+# Fichiers statiques collectés
+staticfiles/
+
+# Logs
 *.log
+logs/
+
+# Artefacts de test / couverture
+.pytest_cache/
+pytest_out.txt
+test_output.txt
+test_result.txt
+.coverage
+htmlcov/
+.tox/
+
+# Distribution / packaging
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Éditeurs
 .DS_Store
+.vscode/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+.idea/
+
+# Docker
+*.pid
+
+# Migrations compilées (garder les .py, ignorer __pycache__)
+**/migrations/__pycache__/

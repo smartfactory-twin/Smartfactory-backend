@@ -1,6 +1,7 @@
 from pathlib import Path
 from decouple import config
 from datetime import timedelta
+from email.utils import formataddr
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -75,7 +76,15 @@ DATABASES = {
 }
 
 # ─── Modèle utilisateur personnalisé ─────────────────────────────────────────
-AUTH_USER_MODEL = 'accounts.User'
+AUTH_USER_MODEL = 'accounts.Utilisateur'
+
+# ─── Hachage bcrypt ──────────────────────────────────────────────────────────
+PASSWORD_HASHERS = [
+    'django.contrib.auth.hashers.BCryptSHA256PasswordHasher',
+    'django.contrib.auth.hashers.PBKDF2PasswordHasher',
+    'django.contrib.auth.hashers.PBKDF2SHA1PasswordHasher',
+    'django.contrib.auth.hashers.Argon2PasswordHasher',
+]
 
 # ─── Validation mots de passe ────────────────────────────────────────────────
 AUTH_PASSWORD_VALIDATORS = [
@@ -99,12 +108,11 @@ MEDIA_ROOT = BASE_DIR / 'media'
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
-# ─── CORS (Flutter Web → Django) ─────────────────────────────────────────────
-CORS_ALLOWED_ORIGINS = [
-    'http://localhost:3000',
-    'http://localhost:8080',
-    'http://127.0.0.1:8080',
-]
+# ─── CORS ────────────────────────────────────────────────────────────────────
+CORS_ALLOWED_ORIGINS = config(
+    'CORS_ALLOWED_ORIGINS',
+    default='http://localhost:3000,http://localhost:8080,http://127.0.0.1:8080'
+).split(',')
 CORS_ALLOW_CREDENTIALS = True
 
 # ─── Django REST Framework ────────────────────────────────────────────────────
@@ -123,6 +131,16 @@ REST_FRAMEWORK = {
     ],
     'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination',
     'PAGE_SIZE': 20,
+    'DEFAULT_THROTTLE_CLASSES': [
+        'rest_framework.throttling.AnonRateThrottle',
+        'rest_framework.throttling.UserRateThrottle',
+    ],
+    'DEFAULT_THROTTLE_RATES': {
+        'anon': '100/hour',
+        'user': '1000/hour',
+        'login': '5/min',
+        'password_reset': '3/hour',
+    },
 }
 
 # ─── JWT ─────────────────────────────────────────────────────────────────────
@@ -133,12 +151,47 @@ SIMPLE_JWT = {
     'BLACKLIST_AFTER_ROTATION': True,
     'UPDATE_LAST_LOGIN': True,
     'AUTH_HEADER_TYPES': ('Bearer',),
+    'USER_ID_FIELD': 'id',
+    'USER_ID_CLAIM': 'user_id',
+    'TOKEN_TYPE_CLAIM': 'token_type',
 }
 
 # ─── Swagger / OpenAPI ────────────────────────────────────────────────────────
 SPECTACULAR_SETTINGS = {
     'TITLE': 'SmartFactory Twin API',
-    'DESCRIPTION': 'API de maintenance prédictive industrielle',
+    'DESCRIPTION': 'API de maintenance prédictive industrielle — Module Authentification (Sprint 1)',
     'VERSION': '1.0.0',
     'SERVE_INCLUDE_SCHEMA': False,
+    'COMPONENT_SPLIT_REQUEST': True,
+    'SECURITY': [{'BearerAuth': []}],
+    'COMPONENTS': {
+        'securitySchemes': {
+            'BearerAuth': {
+                'type': 'http',
+                'scheme': 'bearer',
+                'bearerFormat': 'JWT',
+            }
+        }
+    },
 }
+
+# ─── Email ───────────────────────────────────────────────────────────────────
+EMAIL_BACKEND = config('EMAIL_BACKEND', default='django.core.mail.backends.console.EmailBackend')
+EMAIL_HOST = config('EMAIL_HOST', default='localhost')
+EMAIL_PORT = config('EMAIL_PORT', default=587, cast=int)
+EMAIL_USE_TLS = config('EMAIL_USE_TLS', default=True, cast=bool)
+EMAIL_HOST_USER = config('EMAIL_HOST_USER', default='')
+EMAIL_HOST_PASSWORD = config('EMAIL_HOST_PASSWORD', default='')
+EMAIL_DISPLAY_NAME = config('EMAIL_DISPLAY_NAME', default='SmartFactory Twin')
+DEFAULT_FROM_EMAIL = formataddr((EMAIL_DISPLAY_NAME, config('DEFAULT_FROM_EMAIL', default='smartfactory@localhost')))
+
+# ─── Frontend URL (liens de réinitialisation) ─────────────────────────────────
+FRONTEND_URL = config('FRONTEND_URL', default='http://localhost:3000')
+
+# ─── Réinitialisation de mot de passe ────────────────────────────────────────
+# Durée de validité du token de réinitialisation : 1 heure (3600 secondes)
+PASSWORD_RESET_TIMEOUT = 3600
+
+# ─── Démo superuser ──────────────────────────────────────────────────────────
+DEMO_ADMIN_EMAIL = config('DEMO_ADMIN_EMAIL', default='admin@smartfactory.dz')
+DEMO_ADMIN_PASSWORD = config('DEMO_ADMIN_PASSWORD', default='Admin@2024!')
