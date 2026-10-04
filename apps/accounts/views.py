@@ -12,6 +12,7 @@ from django.contrib.auth.tokens import default_token_generator
 from django.utils.http import urlsafe_base64_encode, urlsafe_base64_decode
 from django.utils.encoding import force_bytes, force_str
 from django.conf import settings
+from django.db import transaction
 import secrets
 import string
 
@@ -32,6 +33,69 @@ from .throttles import LoginThrottle, PasswordResetThrottle
 from .email_utils import send_html_email, LOGO_CID
 
 User = get_user_model()
+
+
+# Champs d'affectation acceptés dans le payload `perimetres`.
+_SCOPE_TARGETS = ('usine', 'zone', 'ligne', 'machine')
+
+
+class PerimetreInvalide(Exception):
+    """Signale une affectation refusée ; utilisé pour annuler la transaction."""
+
+    def __init__(self, message):
+        super().__init__(message)
+        self.message = message
+
+
+def _valider_perimetres(perimetres):
+    """Valide le payload `perimetres` SANS rien créer.
+
+    Format : [{ "usine": 1 }, { "zone": 2 }, { "ligne": 3 }, { "machine": 4 }]
+    Retourne (liste de payloads, None) ou (None, message d'erreur).
+    """
+    from apps.equipements.serializers import UserScopeSerializer
+
+    if not perimetres:  # liste vide = aucune affectation demandée
+        return [], None
+
+    payloads = []
+    for index, item in enumerate(perimetres):
+        if not isinstance(item, dict):
+            return None, f"Affectation #{index + 1} : format invalide (objet attendu)."
+
+        payload = {k: v for k, v in item.items()
+                   if k in _SCOPE_TARGETS and v not in (None, '')}
+        if len(payload) != 1:
+            return None, (f"Affectation #{index + 1} : renseignez exactement un niveau "
+                          f"parmi {', '.join(_SCOPE_TARGETS)}.")
+
+        # `partial=True` : `utilisateur` sera renseigné à la création de l'user,
+        # les 4 niveaux cibles étant de toute façon optionnels.
+        serializer = UserScopeSerializer(data=payload, partial=True)
+        if not serializer.is_valid():
+            messages = '; '.join(
+                f"{k} : {v[0] if isinstance(v, list) else v}"
+                for k, v in serializer.errors.items()
+            )
+            return None, f"Affectation #{index + 1} : {messages}"
+        payloads.append(payload)
+    return payloads, None
+
+
+def _appliquer_perimetres(user, payloads):
+    """Crée les `UserScope`. Lève `PerimetreInvalide` pour annuler la transaction."""
+    from apps.equipements.serializers import UserScopeSerializer
+
+    for index, payload in enumerate(payloads):
+        serializer = UserScopeSerializer(
+            data={'utilisateur': user.id, **payload}
+        )
+        if not serializer.is_valid():
+            raise PerimetreInvalide(f"Affectation #{index + 1} : invalide.")
+        try:
+            serializer.save()
+        except Exception as exc:  # doublon, contrainte BDD…
+            raise PerimetreInvalide(f"Affectation #{index + 1} : {exc}")
 
 
 def generate_strong_password(length: int = 14) -> str:
@@ -578,15 +642,37 @@ class AdminUserCreateView(generics.CreateAPIView):
             )
 
         password = generate_strong_password()
-        user = User.objects.create_user(
-            email=serializer.validated_data['email'],
-            password=password,
-            nom=serializer.validated_data['nom'],
-            prenom=serializer.validated_data['prenom'],
-            role=role,
-            must_reset_password=True,
-            actif=False,  # Inactif par défaut jusqu'au premier login (changement de mot de passe)
-        )
+
+        # Affectations / périmètre d'accès (UserScope) : validées AVANT toute
+        # création, pour ne jamais laisser un utilisateur sans ses affectations.
+        perimetres = request.data.get('perimetres')
+        scope_payloads = []
+        if perimetres is not None:
+            if not isinstance(perimetres, (list, tuple)):
+                return Response(
+                    {'perimetres': ["Le champ « perimetres » doit être une liste."]},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            scope_payloads, erreur = _valider_perimetres(perimetres)
+            if erreur:
+                return Response({'perimetres': [erreur]}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            with transaction.atomic():
+                user = User.objects.create_user(
+                    email=serializer.validated_data['email'],
+                    password=password,
+                    nom=serializer.validated_data['nom'],
+                    prenom=serializer.validated_data['prenom'],
+                    role=role,
+                    must_reset_password=True,
+                    actif=False,  # Inactif par défaut jusqu'au premier login (changement de mot de passe)
+                )
+                if scope_payloads:
+                    _appliquer_perimetres(user, scope_payloads)
+        except PerimetreInvalide as exc:
+            # L'exception annule la transaction : l'utilisateur n'est pas créé.
+            return Response({'perimetres': [exc.message]}, status=status.HTTP_400_BAD_REQUEST)
 
         login_url  = f"{settings.FRONTEND_URL}/login"
         send_html_email(

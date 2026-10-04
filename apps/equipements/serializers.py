@@ -5,7 +5,7 @@ from django.conf import settings
 from rest_framework import serializers
 from .models import (
     Usine, Zone, LigneProduction, Machine, Document, Composant, Sensor, Reading,
-    InspectionVisuelle,
+    InspectionVisuelle, UserScope,
 )
 from .readings_io import normalize_timestamp
 
@@ -99,12 +99,23 @@ class MachineListSerializer(serializers.ModelSerializer):
 class MachineDetailSerializer(MachineListSerializer):
     composants = ComposantSerializer(many=True, read_only=True)
     documents  = DocumentSerializer(many=True, read_only=True)
+    zone       = serializers.SerializerMethodField()
+    usine      = serializers.SerializerMethodField()
+    ligne_nom  = serializers.CharField(source='ligne_production.nom', read_only=True, default=None)
 
     class Meta(MachineListSerializer.Meta):
         fields = MachineListSerializer.Meta.fields + [
             'position_sur_plan', 'description', 'composants', 'documents',
+            'zone', 'usine', 'ligne_nom',
             'created_at', 'updated_at',
         ]
+
+    def get_zone(self, obj):
+        return obj.ligne_production.zone_id if obj.ligne_production_id else None
+
+    def get_usine(self, obj):
+        ligne = obj.ligne_production
+        return ligne.zone.usine_id if ligne and ligne.zone_id else None
 
 
 class MachineCreateUpdateSerializer(serializers.ModelSerializer):
@@ -277,6 +288,7 @@ class InspectionVisuelleSerializer(serializers.ModelSerializer):
     statut_analyse_label = serializers.CharField(
         source='get_statut_analyse_display', read_only=True
     )
+    statut = serializers.CharField(source='statut_analyse', read_only=True)
     image = serializers.SerializerMethodField()
 
     class Meta:
@@ -285,11 +297,13 @@ class InspectionVisuelleSerializer(serializers.ModelSerializer):
             'id', 'machine', 'machine_nom', 'machine_identifiant', 'machine_statut',
             'ligne_nom', 'usine_nom', 'image', 'date_inspection',
             'utilisateur', 'utilisateur_nom', 'statut_analyse', 'statut_analyse_label',
+            'statut', 'defect_detected', 'defect_type', 'confidence', 'observation',
             'resultat_analyse', 'score_confiance', 'observations', 'erreur_message',
             'created_at', 'updated_at',
         ]
         read_only_fields = [
-            'id', 'date_inspection', 'utilisateur', 'statut_analyse',
+            'id', 'date_inspection', 'utilisateur', 'statut_analyse', 'statut',
+            'defect_detected', 'defect_type', 'confidence', 'observation',
             'resultat_analyse', 'score_confiance', 'erreur_message',
             'created_at', 'updated_at',
         ]
@@ -358,3 +372,188 @@ class InspectionCreateSerializer(serializers.ModelSerializer):
                 "Extension d'image non supportée. Utilisez .jpg, .jpeg ou .png."
             )
         return image
+
+
+# ── Périmètres d'accès (UserScope) ─────────────────────────────────────────────
+
+class UserScopeSerializer(serializers.ModelSerializer):
+    """Affectation d'un utilisateur à un périmètre de la hiérarchie.
+
+    Expose une lecture « chemin » (`libelle`) ainsi que les machines
+    réellement ouvertes par *cette* affectation, pour que le frontend
+    n'ait aucune logique d'accès à recalculer.
+    """
+
+    utilisateur_nom = serializers.SerializerMethodField()
+    niveau           = serializers.SerializerMethodField()
+    libelle          = serializers.SerializerMethodField()
+
+    # Les 4 niveaux cibles sont optionnels : c'est `validate()` qui impose
+    # qu'exactement UN soit renseigné (les drf ModelSerializer ne déduisent pas
+    # `required=False` depuis `blank=True` sur ces FK, d'où la déclaration ici).
+    usine = serializers.PrimaryKeyRelatedField(
+        queryset=Usine.objects.all(), required=False, allow_null=True)
+    zone = serializers.PrimaryKeyRelatedField(
+        queryset=Zone.objects.all(), required=False, allow_null=True)
+    ligne = serializers.PrimaryKeyRelatedField(
+        queryset=LigneProduction.objects.all(), required=False, allow_null=True)
+    machine = serializers.PrimaryKeyRelatedField(
+        queryset=Machine.objects.all(), required=False, allow_null=True)
+
+    usine_nom             = serializers.CharField(source='usine.nom', read_only=True, default=None)
+    zone_nom              = serializers.CharField(source='zone.nom', read_only=True, default=None)
+    ligne_nom             = serializers.CharField(source='ligne.nom', read_only=True, default=None)
+    ligne_zone_nom        = serializers.CharField(source='ligne.zone.nom', read_only=True, default=None)
+    ligne_zone_usine_nom  = serializers.CharField(source='ligne.zone.usine.nom', read_only=True, default=None)
+    machine_nom           = serializers.CharField(source='machine.nom', read_only=True, default=None)
+    machine_identifiant   = serializers.CharField(source='machine.identifiant_interne', read_only=True, default=None)
+
+    machines_accessibles      = serializers.SerializerMethodField()
+    nb_machines_accessibles   = serializers.SerializerMethodField()
+    cible_ids                 = serializers.SerializerMethodField()
+    est_active                = serializers.SerializerMethodField()
+
+    class Meta:
+        model = UserScope
+        fields = [
+            'id', 'utilisateur', 'utilisateur_nom', 'niveau', 'libelle',
+            'usine', 'usine_nom',
+            'zone', 'zone_nom',
+            'ligne', 'ligne_nom', 'ligne_zone_nom', 'ligne_zone_usine_nom',
+            'machine', 'machine_nom', 'machine_identifiant',
+            'actif', 'est_active', 'date_debut', 'date_fin',
+            'machines_accessibles', 'nb_machines_accessibles', 'cible_ids',
+            'created_at', 'updated_at',
+        ]
+        read_only_fields = ['created_at', 'updated_at']
+
+    def get_utilisateur_nom(self, obj):
+        return f'{obj.utilisateur.prenom} {obj.utilisateur.nom}'.strip()
+
+    def get_niveau(self, obj):
+        for niveau in ('usine', 'zone', 'ligne', 'machine'):
+            if getattr(obj, f'{niveau}_id'):
+                return niveau
+        return None
+
+    def get_libelle(self, obj):
+        """Chemin lisible : « Usine → Zone → Ligne » ou « Machine »."""
+        if obj.machine_id:
+            return obj.machine.nom
+        if obj.ligne_id:
+            return f'{obj.ligne.zone.usine.nom} → {obj.ligne.zone.nom} → {obj.ligne.nom}'
+        if obj.zone_id:
+            return f'{obj.zone.usine.nom} → {obj.zone.nom}'
+        if obj.usine_id:
+            return obj.usine.nom
+        return '—'
+
+    def _machines(self, obj):
+        """Machines ouvertes par CETTE affectation (source : scope_machine_q)."""
+        from .permissions import scope_machine_q
+        return Machine.objects.filter(scope_machine_q(obj)).order_by('nom', 'id')
+
+    def get_machines_accessibles(self, obj):
+        return [
+            {
+                'id': m.id,
+                'nom': m.nom,
+                'identifiant_interne': m.identifiant_interne,
+                'statut': m.statut,
+            }
+            for m in self._machines(obj)
+        ]
+
+    def get_nb_machines_accessibles(self, obj):
+        return self._machines(obj).count()
+
+    def get_cible_ids(self, obj):
+        """IDs de la chaîne Usine → Zone → Ligne de la cible de l'affectation.
+
+        Permet au frontend de pré-remplir le sélecteur hiérarchique sans
+        refaire la remontée d hierarchie (utile pour modifier une affectation
+        ciblant une machine, qui n'expose pas directement sa ligne).
+        """
+        ligne = None
+        if obj.ligne_id:
+            ligne = obj.ligne
+        elif obj.machine_id:
+            ligne = obj.machine.ligne_production
+
+        zone = ligne.zone if ligne else (obj.zone if obj.zone_id else None)
+        usine = zone.usine if zone else (obj.usine if obj.usine_id else None)
+        return {
+            'usine': usine.id if usine else None,
+            'zone': zone.id if zone else None,
+            'ligne': ligne.id if ligne else None,
+            'machine': obj.machine_id,
+        }
+
+    def get_est_active(self, obj):
+        return obj.est_active()
+
+    def validate(self, attrs):
+        """Refuse toute combinaison incohérente (contrôle serveur)."""
+        base = {
+            'usine': attrs.get('usine', getattr(self.instance, 'usine', None)),
+            'zone': attrs.get('zone', getattr(self.instance, 'zone', None)),
+            'ligne': attrs.get('ligne', getattr(self.instance, 'ligne', None)),
+            'machine': attrs.get('machine', getattr(self.instance, 'machine', None)),
+        }
+        cibles = [k for k, v in base.items() if v is not None]
+        if len(cibles) != 1:
+            raise serializers.ValidationError(
+                "Une affectation doit cibler exactement un niveau : "
+                "usine, zone, ligne de production ou machine."
+            )
+        return attrs
+
+
+class UserScopeBulkCreateSerializer(serializers.Serializer):
+    """Payload `perimetres` envoyé à la création d'un utilisateur.
+
+    Format : [{ "usine": 1 }, { "zone": 2 }, { "ligne": 3 }, { "machine": 4 }]
+    """
+
+    perimetres = UserScopeSerializer(many=True, required=False)
+
+    def create(self, validated_data):
+        raise NotImplementedError  # usage interne uniquement
+
+
+class MonPerimetreSerializer(serializers.Serializer):
+    """Vue résolue du périmètre de l'utilisateur *courant*.
+
+    S'appuie directement sur `scope_queryset_machine()` / `accessible_machine_ids()` :
+    le backend reste l'unique source de vérité, le frontend ne fait que l'afficher.
+    """
+
+    def to_representation(self, user):
+        from .permissions import scope_queryset_machine
+
+        machines = scope_queryset_machine(
+            Machine.objects.select_related('ligne_production').all(), user
+        ).order_by('nom', 'id')
+
+        return {
+            'role': user.role,
+            'role_label': user.get_role_display(),
+            'acces_global': user.role == 'ADMIN',
+            'nb_machines_accessibles': machines.count(),
+            'machines': [
+                {
+                    'id': m.id,
+                    'nom': m.nom,
+                    'identifiant_interne': m.identifiant_interne,
+                    'statut': m.statut,
+                    'ligne': m.ligne_production_id,
+                    'ligne_nom': (
+                        m.ligne_production.nom if m.ligne_production_id else None
+                    ),
+                }
+                for m in machines
+            ],
+            'affectations': UserScopeSerializer(
+                user.scopes.select_related('usine', 'zone', 'ligne', 'machine'), many=True
+            ).data,
+        }

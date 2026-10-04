@@ -29,6 +29,7 @@ THIRD_PARTY_APPS = [
 LOCAL_APPS = [
     'apps.accounts',
     'apps.equipements',
+    'apps.alertes',
 ]
 INSTALLED_APPS = DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS
 
@@ -112,6 +113,41 @@ MEDIA_ROOT = BASE_DIR / 'media'
 VISION_AI_BACKEND = config('VISION_AI_BACKEND', default='mock')
 # Taille maximale acceptée pour une image d'inspection (Mo).
 INSPECTION_IMAGE_MAX_MB = config('INSPECTION_IMAGE_MAX_MB', default=5, cast=int)
+
+# ─── Module 8 — Alertes & Notifications (UC-26 → UC-29) ──────────────────────
+# Les seuils des alertes ne sont PAS stockés ici : ils restent ceux des
+# capteurs (`Sensor.seuil_min` / `Sensor.seuil_max`, Module 3). Seule la
+# *logique de gravité* est paramétrable, pour être modifiable sans code.
+#
+# Règle de niveau (UC-27, explicite et sans IA) — voir `apps/alertes/engine.py` :
+#   CRITIQUE si ratio_plage_pct >= ALERTE_CRITIQUE_RATIO_PCT
+#              ou depassement   >= ALERTE_CRITIQUE_DEPASSEMENT
+#   MAJEURE   si ratio_plage_pct >= ALERTE_MAJEURE_RATIO_PCT
+#              ou depassement   >= ALERTE_MAJEURE_DEPASSEMENT
+#   MINEURE   sinon
+# avec ratio_plage_pct = depassement / (seuil_max − seuil_min) × 100.
+ALERTE_MAJEURE_RATIO_PCT = config('ALERTE_MAJEURE_RATIO_PCT', default=10.0, cast=float)
+ALERTE_CRITIQUE_RATIO_PCT = config('ALERTE_CRITIQUE_RATIO_PCT', default=25.0, cast=float)
+ALERTE_MAJEURE_DEPASSEMENT = config('ALERTE_MAJEURE_DEPASSEMENT', default=20.0, cast=float)
+ALERTE_CRITIQUE_DEPASSEMENT = config('ALERTE_CRITIQUE_DEPASSEMENT', default=50.0, cast=float)
+
+# Le retour à la normale clôt automatiquement les alertes ouvertes du capteur.
+ALERTE_RESOLUTION_AUTO = config('ALERTE_RESOLUTION_AUTO', default=True, cast=bool)
+
+# ─── Module 8 — Canaux de notification (UC-28) ──────────────────────────────
+# Les trois canaux sont désactivables sans toucher au code. Aucun canal ne doit
+# jamais empêcher la création d'une alerte.
+ALERTE_NOTIFICATIONS_IN_APP = config('ALERTE_NOTIFICATIONS_IN_APP', default=True, cast=bool)
+ALERTE_NOTIFICATIONS_EMAIL = config('ALERTE_NOTIFICATIONS_EMAIL', default=False, cast=bool)
+ALERTE_NOTIFICATIONS_SMS = config('ALERTE_NOTIFICATIONS_SMS', default=False, cast=bool)
+# Destinataires de repli (CSV d'emails) : ignorés si l'email est désactivé.
+ALERTE_NOTIFY_EMAILS = config('ALERTE_NOTIFY_EMAILS', default='').split(',')
+ALERTE_EMAIL_NIVEAU_MIN = config('ALERTE_EMAIL_NIVEAU_MIN', default='MAJEURE')
+
+# Twilio : OPTIONNEL. Sans ces variables, aucun SMS n'est envoyé et aucune
+# erreur n'est levée (l'architecture du canal SMS est déjà en place).
+TWILIO_ACCOUNT_SID = config('TWILIO_ACCOUNT_SID', default='')
+TWILIO_AUTH_TOKEN = config('TWILIO_AUTH_TOKEN', default='')
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 

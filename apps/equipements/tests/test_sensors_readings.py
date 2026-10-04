@@ -8,7 +8,7 @@ from rest_framework.test import APIClient
 
 from apps.accounts.models import Utilisateur
 from apps.equipements.models import (
-    Usine, Zone, LigneProduction, Machine, Sensor, Reading,
+    Usine, Zone, LigneProduction, Machine, Sensor, Reading, UserScope,
 )
 
 
@@ -460,6 +460,10 @@ class TestPermissions:
         assert api_client.post('/api/equipements/capteurs/', payload).status_code == 201
 
     def test_20_technicien_can_update_not_create(self, api_client, tech_user, machine, sensor):
+        # Fail-closed : le technicien doit avoir une affectation couvrant la
+        # machine pour que les permissions par rôle s'appliquent ensuite.
+        UserScope.objects.create(utilisateur=tech_user,
+                                 ligne=machine.ligne_production)
         api_client.force_authenticate(tech_user)
         assert api_client.get('/api/equipements/capteurs/').status_code == 200
         assert api_client.patch(
@@ -515,3 +519,54 @@ class TestReadingList:
         r = api_client.get(f'/api/equipements/readings/?sensor={sensor.id}')
         assert r.status_code == 200
         assert r.data['count'] == 1
+
+    def test_scoped_users_can_open_alert_detail_and_notifications(
+        self, api_client, op_user, tech_user, machine, sensor,
+    ):
+        UserScope.objects.create(utilisateur=op_user, ligne=machine.ligne_production)
+        UserScope.objects.create(utilisateur=tech_user, ligne=machine.ligne_production)
+
+        reading = Reading.objects.create(
+            sensor=sensor, valeur=sensor.seuil_max + 10,
+            timestamp=datetime(2026, 10, 3, 10, 0, tzinfo=dt_timezone.utc),
+        )
+        alert = reading.alertes.get()
+
+        for user in (op_user, tech_user):
+            api_client.force_authenticate(user)
+
+            detail = api_client.get(f'/api/alertes/{alert.id}/')
+            assert detail.status_code == 200
+            assert detail.data['lecture'] == reading.id
+
+            notifications = api_client.get('/api/notifications/')
+            assert notifications.status_code == 200
+            assert any(item['alerte'] == alert.id for item in notifications.data['results'])
+
+            counter = api_client.get('/api/notifications/compteur/')
+            assert counter.status_code == 200
+            assert counter.data['non_lues'] >= 1
+
+    def test_acknowledged_alert_detail_serializes_acknowledger_and_rejects_repeat_ack(
+        self, api_client, tech_user, machine, sensor,
+    ):
+        UserScope.objects.create(utilisateur=tech_user, ligne=machine.ligne_production)
+        reading = Reading.objects.create(
+            sensor=sensor, valeur=sensor.seuil_max + 10,
+            timestamp=datetime(2026, 10, 3, 10, 0, tzinfo=dt_timezone.utc),
+        )
+        alert = reading.alertes.get()
+        alert.acquitter(tech_user, 'Inspection effectuée.')
+
+        api_client.force_authenticate(tech_user)
+        detail = api_client.get(f'/api/alertes/{alert.id}/')
+        assert detail.status_code == 200
+        assert detail.data['acquittee_par'] == tech_user.id
+        assert detail.data['acquittable'] is False
+
+        response = api_client.post(
+            f'/api/alertes/{alert.id}/acquitter/',
+            {'commentaire': 'Nouvelle tentative.'},
+            format='json',
+        )
+        assert response.status_code == 409
