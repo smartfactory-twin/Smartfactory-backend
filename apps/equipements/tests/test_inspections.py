@@ -22,7 +22,7 @@ from rest_framework.test import APIClient
 
 from apps.accounts.models import Utilisateur
 from apps.equipements.models import (
-    Usine, Zone, LigneProduction, Machine, InspectionVisuelle,
+    Usine, Zone, LigneProduction, Machine, InspectionVisuelle, UserScope,
 )
 from apps.equipements.vision_ai import MockVisionAIService
 
@@ -401,6 +401,10 @@ class TestInspectionAdminPermissions:
 class TestInspectionTechnicianPermissions:
     def test_09_technicien_can_create_and_analyze(self, api_client, tech_user,
                                                   machine, monkeypatch):
+        # Depuis le passage en fail-closed, un technicien doit disposer d'une
+        # affectation explicite pour intervenir sur une machine.
+        UserScope.objects.create(utilisateur=tech_user,
+                                 ligne=machine.ligne_production)
         monkeypatch.setattr(
             'apps.equipements.views.get_vision_service', lambda: StubVisionService()
         )
@@ -451,3 +455,130 @@ class TestInspectionOperatorPermissions:
             f'/api/inspections/{inspection.id}/'
         ).status_code == 403
         assert InspectionVisuelle.objects.filter(id=inspection.id).exists()
+
+
+# ── 11. Champs de résultat dénormalisés (cahier des charges Module 4) ─────────
+
+@pytest.mark.django_db
+class TestInspectionResultFields:
+    """Les champs defect_detected / defect_type / confidence / observation
+    reflètent le résultat de l'analyse et sont exposés par l'API.
+    """
+
+    def test_11a_fields_persisted_after_analysis(self, api_client, admin_user,
+                                                 machine, monkeypatch):
+        monkeypatch.setattr(
+            'apps.equipements.views.get_vision_service', lambda: StubVisionService()
+        )
+        inspection = create_inspection(machine, admin_user)
+        api_client.force_authenticate(admin_user)
+        r = api_client.post(f'/api/inspections/{inspection.id}/analyze/')
+        assert r.status_code == 200
+
+        inspection.refresh_from_db()
+        assert inspection.defect_detected is True
+        assert inspection.defect_type == 'Fissure'
+        assert inspection.confidence == 0.93
+        assert inspection.score_confiance == 0.93
+        assert inspection.observation
+        assert inspection.statut_analyse == 'TERMINEE'
+
+    def test_11b_serializer_exposes_result_fields(self, api_client, admin_user,
+                                                  machine, monkeypatch):
+        monkeypatch.setattr(
+            'apps.equipements.views.get_vision_service', lambda: StubVisionService()
+        )
+        inspection = create_inspection(machine, admin_user)
+        api_client.force_authenticate(admin_user)
+        api_client.post(f'/api/inspections/{inspection.id}/analyze/')
+
+        r = api_client.get(f'/api/inspections/{inspection.id}/')
+        assert r.status_code == 200
+        assert r.data['defect_detected'] is True
+        assert r.data['defect_type'] == 'Fissure'
+        assert r.data['confidence'] == 0.93
+        assert r.data['observation']
+        # Alias `statut` du cahier des charges.
+        assert r.data['statut'] == 'TERMINEE'
+        assert r.data['statut_analyse'] == 'TERMINEE'
+
+    def test_11c_defaults_before_analysis(self, api_client, admin_user, machine):
+        inspection = create_inspection(machine, admin_user)
+        api_client.force_authenticate(admin_user)
+        r = api_client.get(f'/api/inspections/{inspection.id}/')
+        assert r.status_code == 200
+        assert r.data['defect_detected'] is None
+        assert r.data['defect_type'] == ''
+        assert r.data['confidence'] is None
+        assert r.data['observation'] == ''
+        assert r.data['statut'] == 'EN_ATTENTE'
+
+    def test_11d_error_clears_result_fields(self, api_client, admin_user, machine,
+                                            monkeypatch):
+        inspection = create_inspection(machine, admin_user)
+        api_client.force_authenticate(admin_user)
+
+        monkeypatch.setattr(
+            'apps.equipements.views.get_vision_service', lambda: StubVisionService()
+        )
+        api_client.post(f'/api/inspections/{inspection.id}/analyze/')
+        inspection.refresh_from_db()
+        assert inspection.defect_type == 'Fissure'
+
+        monkeypatch.setattr(
+            'apps.equipements.views.get_vision_service', lambda: FailingVisionService()
+        )
+        r = api_client.post(f'/api/inspections/{inspection.id}/analyze/')
+        assert r.status_code == 400
+
+        inspection.refresh_from_db()
+        assert inspection.statut_analyse == 'ERREUR'
+        assert inspection.defect_detected is None
+        assert inspection.defect_type == ''
+        assert inspection.confidence is None
+        assert inspection.observation == ''
+
+    def test_11e_filter_by_defect_type(self, api_client, admin_user, machine,
+                                       monkeypatch):
+        monkeypatch.setattr(
+            'apps.equipements.views.get_vision_service', lambda: StubVisionService()
+        )
+        analyzed = create_inspection(machine, admin_user)
+        create_inspection(machine, admin_user)
+        api_client.force_authenticate(admin_user)
+        api_client.post(f'/api/inspections/{analyzed.id}/analyze/')
+
+        r = api_client.get('/api/inspections/?defect_type=Fissure')
+        assert r.status_code == 200
+        assert r.data['count'] == 1
+        assert r.data['results'][0]['id'] == analyzed.id
+
+    def test_11f_filter_by_defect_detected(self, api_client, admin_user, machine,
+                                           monkeypatch):
+        monkeypatch.setattr(
+            'apps.equipements.views.get_vision_service', lambda: StubVisionService()
+        )
+        analyzed = create_inspection(machine, admin_user)
+        create_inspection(machine, admin_user)
+        api_client.force_authenticate(admin_user)
+        api_client.post(f'/api/inspections/{analyzed.id}/analyze/')
+
+        r = api_client.get('/api/inspections/?defect_detected=true')
+        assert r.status_code == 200
+        assert r.data['count'] == 1
+        assert r.data['results'][0]['id'] == analyzed.id
+
+    def test_11g_ordering_by_confidence(self, api_client, admin_user, machine):
+        InspectionVisuelle.objects.create(
+            machine=machine, utilisateur=admin_user, image=make_png(),
+            statut_analyse='TERMINEE', confidence=0.5, score_confiance=0.5,
+        )
+        InspectionVisuelle.objects.create(
+            machine=machine, utilisateur=admin_user, image=make_png(),
+            statut_analyse='TERMINEE', confidence=0.9, score_confiance=0.9,
+        )
+        api_client.force_authenticate(admin_user)
+        r = api_client.get('/api/inspections/?ordering=confidence')
+        assert r.status_code == 200
+        confidences = [row['confidence'] for row in r.data['results']]
+        assert confidences == sorted(confidences)

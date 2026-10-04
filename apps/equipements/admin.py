@@ -1,7 +1,7 @@
 from django.contrib import admin
 from .models import (
     Usine, Zone, LigneProduction, Machine, Document, Composant, Sensor, Reading,
-    InspectionVisuelle,
+    InspectionVisuelle, UserScope,
 )
 
 @admin.register(Usine)
@@ -59,3 +59,14 @@ class InspectionVisuelleAdmin(admin.ModelAdmin):
     list_filter = ['statut_analyse', 'machine__ligne_production__zone__usine']
     search_fields = ['machine__nom', 'machine__identifiant_interne']
     date_hierarchy = 'date_inspection'
+
+
+# ── Périmètres d'accès (affectations) ─────────────────────────────────────────
+
+@admin.register(UserScope)
+class UserScopeAdmin(admin.ModelAdmin):
+    list_display = ['utilisateur', 'usine', 'zone', 'ligne', 'machine', 'actif',
+                    'date_debut', 'date_fin']
+    list_filter = ['actif', 'usine', 'zone', 'ligne']
+    search_fields = ['utilisateur__email', 'utilisateur__nom', 'utilisateur__prenom']
+    autocomplete_fields = ['utilisateur']

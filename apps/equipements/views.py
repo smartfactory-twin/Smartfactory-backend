@@ -8,10 +8,12 @@ from rest_framework.filters import SearchFilter, OrderingFilter
 from rest_framework.permissions import IsAuthenticated
 from django_filters.rest_framework import DjangoFilterBackend
 
-from .models import Usine, Zone, LigneProduction, Machine, Document, Composant, Sensor, Reading, InspectionVisuelle
+from .models import Usine, Zone, LigneProduction, Machine, Document, Composant, Sensor, Reading, InspectionVisuelle, UserScope
 from .permissions import (
     IsAdminOrReadOnly, MachineAccessPermission, IsAdminRole, ReadingAccessPermission,
-    InspectionAccessPermission,
+    InspectionAccessPermission, ScopedMachineAccess,
+    scope_queryset_machine, scope_queryset_sensor, scope_queryset_reading,
+    scope_queryset_inspection, scope_queryset_machine_child,
 )
 from .serializers import (
     UsineSerializer, UsineHierarchieSerializer,
@@ -20,6 +22,7 @@ from .serializers import (
     MachineListSerializer, MachineDetailSerializer, MachineCreateUpdateSerializer,
     SensorSerializer, SensorListSerializer, SensorDetailSerializer, ReadingSerializer,
     InspectionVisuelleSerializer, InspectionCreateSerializer,
+    UserScopeSerializer, MonPerimetreSerializer,
 )
 from .csv_hierarchy import (
     validate_and_parse_hierarchy_csv,
@@ -128,11 +131,15 @@ class MachineViewSet(viewsets.ModelViewSet):
         'ligne_production__zone',
         'ligne_production__zone__usine'
     ).prefetch_related('composants', 'documents').all()
-    permission_classes = [MachineAccessPermission]
+    permission_classes = [MachineAccessPermission, ScopedMachineAccess]
     filter_backends = [DjangoFilterBackend, SearchFilter, OrderingFilter]
     filterset_fields = ['statut', 'ligne_production__zone', 'ligne_production__zone__usine']
     search_fields = ['nom', 'identifiant_interne', 'numero_serie']
     ordering_fields = ['nom', 'created_at', 'statut']
+
+    def get_queryset(self):
+        """Restreint la liste ET le détail au périmètre d'affectation (backend)."""
+        return scope_queryset_machine(super().get_queryset(), self.request.user)
 
     def get_serializer_class(self):
         if self.action == 'list':
@@ -144,7 +151,7 @@ class MachineViewSet(viewsets.ModelViewSet):
     # ── Composants inline ─────────────────────────────────────────────────────
 
     @action(detail=True, methods=['get'], url_path='composants',
-            permission_classes=[IsAuthenticated])
+            permission_classes=[IsAuthenticated, ScopedMachineAccess])
     def list_composants(self, request, pk=None):
         """GET /api/equipements/machines/{id}/composants/"""
         machine = self.get_object()
@@ -153,7 +160,7 @@ class MachineViewSet(viewsets.ModelViewSet):
         return Response(serializer.data)
 
     @action(detail=True, methods=['post'], url_path='composants/add',
-            permission_classes=[IsAdminOrReadOnly])
+            permission_classes=[IsAdminOrReadOnly, ScopedMachineAccess])
     def add_composant(self, request, pk=None):
         """POST /api/equipements/machines/{id}/composants/add/"""
         machine = self.get_object()
@@ -257,17 +264,25 @@ class MachineViewSet(viewsets.ModelViewSet):
 class ComposantViewSet(viewsets.ModelViewSet):
     queryset = Composant.objects.select_related('machine').all()
     serializer_class = ComposantSerializer
-    permission_classes = [IsAdminOrReadOnly]
+    permission_classes = [IsAdminOrReadOnly, ScopedMachineAccess]
     filter_backends = [DjangoFilterBackend]
     filterset_fields = ['machine']
+
+    def get_queryset(self):
+        """Restreint les composants aux machines du périmètre de l'utilisateur."""
+        return scope_queryset_machine_child(super().get_queryset(), self.request.user)
 
 
 class DocumentViewSet(viewsets.ModelViewSet):
     queryset = Document.objects.select_related('machine').all()
     serializer_class = DocumentSerializer
-    permission_classes = [IsAdminOrReadOnly]
+    permission_classes = [IsAdminOrReadOnly, ScopedMachineAccess]
     filter_backends = [DjangoFilterBackend]
     filterset_fields = ['machine']
+
+    def get_queryset(self):
+        """Restreint les documents aux machines du périmètre de l'utilisateur."""
+        return scope_queryset_machine_child(super().get_queryset(), self.request.user)
 
 
 # ── Capteurs ────────────────────────────────────────────────────────────────────
@@ -276,11 +291,15 @@ class SensorViewSet(viewsets.ModelViewSet):
     queryset = Sensor.objects.select_related('machine', 'machine__ligne_production',
                                              'machine__ligne_production__zone',
                                              'machine__ligne_production__zone__usine').all()
-    permission_classes = [MachineAccessPermission]
+    permission_classes = [MachineAccessPermission, ScopedMachineAccess]
     filter_backends = [DjangoFilterBackend, SearchFilter, OrderingFilter]
     filterset_fields = ['machine', 'type_capteur', 'actif']
     search_fields = ['identifiant', 'nom', 'machine__nom', 'machine__identifiant_interne']
     ordering_fields = ['nom', 'identifiant', 'created_at']
+
+    def get_queryset(self):
+        """Restreint les capteurs aux machines du périmètre de l'utilisateur."""
+        return scope_queryset_sensor(super().get_queryset(), self.request.user)
 
     def get_serializer_class(self):
         if self.action == 'list':
@@ -329,11 +348,19 @@ class SensorViewSet(viewsets.ModelViewSet):
 class ReadingViewSet(viewsets.ModelViewSet):
     queryset = Reading.objects.select_related('sensor', 'sensor__machine').all()
     serializer_class = ReadingSerializer
-    permission_classes = [ReadingAccessPermission]
+    permission_classes = [ReadingAccessPermission, ScopedMachineAccess]
     filter_backends = [DjangoFilterBackend, OrderingFilter]
-    filterset_fields = ['sensor', 'sensor__machine']
+    filterset_fields = {
+        'sensor': ['exact'],
+        'sensor__machine': ['exact'],
+        'timestamp': ['gte', 'lte', 'gt', 'lt'],
+    }
     ordering_fields = ['timestamp', 'valeur']
     ordering = ['-timestamp']
+
+    def get_queryset(self):
+        """Restreint les mesures aux capteurs du périmètre de l'utilisateur."""
+        return scope_queryset_reading(super().get_queryset(), self.request.user)
 
     def create(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)
@@ -450,12 +477,18 @@ class InspectionVisuelleViewSet(viewsets.ModelViewSet):
         'machine__ligne_production__zone__usine',
         'utilisateur',
     ).all()
-    permission_classes = [InspectionAccessPermission]
+    permission_classes = [InspectionAccessPermission, ScopedMachineAccess]
     filter_backends = [DjangoFilterBackend, SearchFilter, OrderingFilter]
-    filterset_fields = ['machine', 'statut_analyse', 'utilisateur']
+    filterset_fields = [
+        'machine', 'statut_analyse', 'utilisateur', 'defect_type', 'defect_detected',
+    ]
     search_fields = ['machine__nom', 'machine__identifiant_interne']
-    ordering_fields = ['date_inspection', 'score_confiance']
+    ordering_fields = ['date_inspection', 'score_confiance', 'confidence']
     ordering = ['-date_inspection']
+
+    def get_queryset(self):
+        """Restreint les inspections aux machines du périmètre de l'utilisateur."""
+        return scope_queryset_inspection(super().get_queryset(), self.request.user)
 
     def get_serializer_class(self):
         if self.action == 'create':
@@ -486,7 +519,17 @@ class InspectionVisuelleViewSet(viewsets.ModelViewSet):
         except Exception as exc:  # service indisponible / erreur inattendue
             inspection.statut_analyse = InspectionVisuelle.StatutAnalyse.ERREUR
             inspection.erreur_message = f"Erreur lors de l'analyse : {exc}"
-            inspection.save(update_fields=['statut_analyse', 'erreur_message', 'updated_at'])
+            inspection.resultat_analyse = None
+            inspection.score_confiance = None
+            inspection.defect_detected = None
+            inspection.defect_type = ''
+            inspection.confidence = None
+            inspection.observation = ''
+            inspection.save(update_fields=[
+                'statut_analyse', 'erreur_message', 'resultat_analyse',
+                'score_confiance', 'defect_detected', 'defect_type', 'confidence',
+                'observation', 'updated_at',
+            ])
             out = InspectionVisuelleSerializer(inspection, context={'request': request})
             return Response(
                 {'detail': inspection.erreur_message, 'inspection': out.data},
@@ -495,10 +538,62 @@ class InspectionVisuelleViewSet(viewsets.ModelViewSet):
 
         inspection.resultat_analyse = result
         inspection.score_confiance = result.get('confidence')
+        inspection.defect_detected = result.get('defect_detected')
+        inspection.defect_type = result.get('defect_type') or ''
+        inspection.confidence = result.get('confidence')
+        inspection.observation = result.get('comment') or ''
         inspection.statut_analyse = InspectionVisuelle.StatutAnalyse.TERMINEE
         inspection.save(update_fields=[
-            'resultat_analyse', 'score_confiance', 'statut_analyse', 'updated_at',
+            'resultat_analyse', 'score_confiance', 'defect_detected', 'defect_type',
+            'confidence', 'observation', 'statut_analyse', 'updated_at',
         ])
         out = InspectionVisuelleSerializer(inspection, context={'request': request})
         return Response(out.data, status=status.HTTP_200_OK)
+
+
+# ── Périmètres d'accès (UserScope) ────────────────────────────────────────────
+
+class UserScopeViewSet(viewsets.ModelViewSet):
+    """Affectations utilisateur ↔ périmètre equipment.
+
+    - GET    /api/equipements/perimetres/               liste (ADMIN : filtre
+              `?utilisateur=<id>` ; sinon : ses propres affectations)
+    - GET    /api/equipements/perimetres/mon-perimetre/  périmètre résolu du
+              user connecté (rôle, compteur + machines réellement accessibles)
+    - POST   /api/equipements/perimetres/               (ADMIN)
+    - PATCH  /api/equipements/perimetres/{id}/          (ADMIN)
+    - DELETE /api/equipements/perimetres/{id}/           (ADMIN)
+
+    La **lecture** de son propre périmètre est ouverte à tout utilisateur
+    authentifié ; toute **écriture** est réservée à l'ADMIN. La sécurité des
+    équipements reste gérée par `accessible_machine_ids` / `ScopedMachineAccess`
+    (inchangée) : cet endpoint ne sert qu'à exposer la donnée.
+    """
+
+    queryset = UserScope.objects.select_related(
+        'utilisateur', 'usine', 'zone', 'ligne', 'ligne__zone',
+        'ligne__zone__usine', 'machine',
+    ).all()
+    serializer_class = UserScopeSerializer
+    permission_classes = [IsAuthenticated, IsAdminOrReadOnly]
+    filter_backends = [DjangoFilterBackend, OrderingFilter]
+    filterset_fields = ['utilisateur', 'usine', 'zone', 'ligne', 'machine', 'actif']
+    ordering_fields = ['created_at', 'utilisateur']
+    ordering = ['utilisateur']
+
+    def get_queryset(self):
+        user = self.request.user
+        qs = super().get_queryset()
+
+        # ADMIN : accès à tous les périmètres (peut filtrer par utilisateur).
+        if getattr(user, 'role', None) == 'ADMIN':
+            return qs
+
+        # OPERATEUR / TECHNICIEN : lecture de ses propres affectations uniquement.
+        return qs.filter(utilisateur=user)
+
+    @action(detail=False, methods=['get'], url_path='mon-perimetre')
+    def mon_perimetre(self, request):
+        """Périmètre résolu de l'utilisateur connecté (lecture seule)."""
+        return Response(MonPerimetreSerializer(request.user).data)
 

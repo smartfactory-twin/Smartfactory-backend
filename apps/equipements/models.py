@@ -266,6 +266,20 @@ class InspectionVisuelle(models.Model):
     score_confiance = models.FloatField(
         null=True, blank=True, verbose_name="Score de confiance"
     )
+    # Champs de résultat dénormalisés (cahier des charges Module 4) : ils
+    # reflètent `resultat_analyse` et facilitent l'affichage, le filtrage et le tri.
+    defect_detected = models.BooleanField(
+        null=True, blank=True, default=None, verbose_name="Défaut détecté"
+    )
+    defect_type = models.CharField(
+        max_length=50, blank=True, default='', verbose_name="Type de défaut"
+    )
+    confidence = models.FloatField(
+        null=True, blank=True, verbose_name="Score de confiance (0-1)"
+    )
+    observation = models.TextField(
+        blank=True, default='', verbose_name="Observation de l'analyse"
+    )
     observations = models.TextField(blank=True, default='', verbose_name="Observations")
     erreur_message = models.TextField(
         blank=True, default='', verbose_name="Message d'erreur"
@@ -284,3 +298,129 @@ class InspectionVisuelle(models.Model):
 
     def __str__(self):
         return f'Inspection #{self.pk} — {self.machine.nom} ({self.get_statut_analyse_display()})'
+
+
+# ── Périmètres d'accès (affectations utilisateur ↔ équipements) ────────────────
+
+class UserScope(models.Model):
+    """Affectation d'un utilisateur à un périmètre de la hiérarchie industrielle.
+
+    Modèle explicite (et non un simple FK sur `Utilisateur`) car un utilisateur
+    peut avoir **plusieurs** périmètres, à des niveaux différents :
+
+        Opérateur  → Ligne CNC 01, Ligne CNC 02
+        Technicien → Zone Usinage, Machine Robot RA-104
+
+    Le niveau cible est déduit du seul champ renseigné :
+
+    * `usine`   → toute l'usine (et zones / lignes / machines descendantes) ;
+    * `zone`    → toute la zone (et lignes / machines descendantes) ;
+    * `ligne`   → les machines de la ligne ;
+    * `machine` → cette machine seule.
+
+    `ADMIN` n'a pas besoin d'affectation : son accès est global.
+    Les affectations peuvent être historisées via `date_debut` / `date_fin`.
+    """
+
+    class Meta:
+        verbose_name = "Périmètre d'accès"
+        verbose_name_plural = "Périmètres d'accès"
+        ordering = ['utilisateur', 'usine', 'zone', 'ligne', 'machine']
+        constraints = [
+            # Un seul niveau cible par affectation : évite les périmètres ambigus.
+            models.CheckConstraint(
+                condition=(
+                    models.Q(usine__isnull=False, zone__isnull=True, ligne__isnull=True, machine__isnull=True)
+                    | models.Q(usine__isnull=True, zone__isnull=False, ligne__isnull=True, machine__isnull=True)
+                    | models.Q(usine__isnull=True, zone__isnull=True, ligne__isnull=False, machine__isnull=True)
+                    | models.Q(usine__isnull=True, zone__isnull=True, ligne__isnull=True, machine__isnull=False)
+                ),
+                name='userscope_exactly_one_target',
+            ),
+            # Pas d'affectation vide.
+            models.CheckConstraint(
+                condition=(
+                    models.Q(usine__isnull=False)
+                    | models.Q(zone__isnull=False)
+                    | models.Q(ligne__isnull=False)
+                    | models.Q(machine__isnull=False)
+                ),
+                name='userscope_at_least_one_target',
+            ),
+        ]
+        # Pas de `UniqueConstraint` ici, volontairement : sur PostgreSQL/SQLite
+        # les NULL sont distincts, elle n'interdirait donc pas les doublons
+        # réels (3 colonnes sur 4 valent NULL pour une affectation sur une
+        # ligne). De plus DRF la traduisait en `UniqueTogetherValidator`, ce
+        # qui rendait `usine`/`zone`/`ligne`/`machine` obligatoires dans
+        # l'API alors qu'ils sont alternatifs. L'unicité est garantie
+        # applicativement dans `UserScope.clean()`.
+
+    utilisateur = models.ForeignKey(
+        'accounts.Utilisateur',
+        on_delete=models.CASCADE,
+        related_name='scopes',
+        verbose_name="Utilisateur",
+    )
+    usine = models.ForeignKey(
+        Usine, on_delete=models.CASCADE, null=True, blank=True,
+        related_name='user_scopes', verbose_name="Usine",
+    )
+    zone = models.ForeignKey(
+        Zone, on_delete=models.CASCADE, null=True, blank=True,
+        related_name='user_scopes', verbose_name="Zone",
+    )
+    ligne = models.ForeignKey(
+        LigneProduction, on_delete=models.CASCADE, null=True, blank=True,
+        related_name='user_scopes', verbose_name="Ligne de production",
+    )
+    machine = models.ForeignKey(
+        Machine, on_delete=models.CASCADE, null=True, blank=True,
+        related_name='user_scopes', verbose_name="Machine",
+    )
+    actif = models.BooleanField(default=True, verbose_name="Actif")
+    date_debut = models.DateTimeField(null=True, blank=True, verbose_name="Date de début")
+    date_fin = models.DateTimeField(null=True, blank=True, verbose_name="Date de fin")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        cible = self.usine or self.zone or self.ligne or self.machine
+        return f'{self.utilisateur} → {cible}'
+
+    def clean(self):
+        """Valide : une seule cible, pas de doublon pour un même utilisateur."""
+        from django.core.exceptions import ValidationError
+
+        cibles = [self.usine_id, self.zone_id, self.ligne_id, self.machine_id]
+        if sum(1 for c in cibles if c) != 1:
+            raise ValidationError(
+                "Une affectation doit cibler exactement un niveau : "
+                "usine, zone, ligne de production ou machine."
+            )
+
+        doublon = UserScope.objects.filter(
+            utilisateur=self.utilisateur,
+            usine_id=self.usine_id,
+            zone_id=self.zone_id,
+            ligne_id=self.ligne_id,
+            machine_id=self.machine_id,
+        ).exclude(pk=self.pk).exists()
+        if doublon:
+            raise ValidationError("Cette affectation existe déjà pour cet utilisateur.")
+
+    def save(self, *args, **kwargs):
+        self.full_clean(exclude=['date_debut', 'date_fin'])
+        super().save(*args, **kwargs)
+
+    def est_active(self, now=None):
+        """L'affectation est-elle en cours de validité ?"""
+        from django.utils import timezone
+        now = now or timezone.now()
+        if not self.actif:
+            return False
+        if self.date_debut and self.date_debut > now:
+            return False
+        if self.date_fin and self.date_fin <= now:
+            return False
+        return True

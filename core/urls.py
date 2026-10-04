@@ -55,6 +55,13 @@ urlpatterns = [
          InspectionVisuelleViewSet.as_view({'post': 'analyze'}),
          name='inspections-analyze'),
 
+    # ── Module 8 — Alertes & Notifications (UC-26 → UC-29) ─────────────────
+    # Monté en `api/` : `include()` ne court-circuite pas les routes qui ne
+    # correspondent pas (`api/schema/`, `api/readings/`, ... restent résolues
+    # par les patterns suivants). Le filtrage par périmètre `UserScope` est
+    # appliqué côté backend dans `apps/alertes/views.py`.
+    path('api/', include('apps.alertes.urls')),
+
     # Swagger UI → http://localhost:8000/api/docs/
     path('api/schema/', SpectacularAPIView.as_view(), name='schema'),
     path('api/docs/',   SpectacularSwaggerView.as_view(url_name='schema'), name='swagger-ui'),
