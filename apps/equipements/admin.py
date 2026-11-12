@@ -1,7 +1,7 @@
 from django.contrib import admin
 from .models import (
     Usine, Zone, LigneProduction, Machine, Document, Composant, Sensor, Reading,
-    InspectionVisuelle, UserScope,
+    InspectionVisuelle, UserScope, OrdreTravail, MaintenanceRecurrente,
 )
 
 @admin.register(Usine)
@@ -70,3 +70,16 @@ class UserScopeAdmin(admin.ModelAdmin):
     list_filter = ['actif', 'usine', 'zone', 'ligne']
     search_fields = ['utilisateur__email', 'utilisateur__nom', 'utilisateur__prenom']
     autocomplete_fields = ['utilisateur']
+
+
+@admin.register(OrdreTravail)
+class OrdreTravailAdmin(admin.ModelAdmin):
+    list_display = ['id', 'machine', 'type_ordre', 'priorite', 'statut', 'assigne', 'echeance']
+    list_filter = ['statut', 'priorite', 'type_ordre']
+    search_fields = ['titre', 'machine__nom', 'machine__identifiant_interne', 'assigne']
+
+
+@admin.register(MaintenanceRecurrente)
+class MaintenanceRecurrenteAdmin(admin.ModelAdmin):
+    list_display = ['titre', 'machine', 'frequence_jours', 'date_debut']
+    search_fields = ['titre', 'machine__nom']

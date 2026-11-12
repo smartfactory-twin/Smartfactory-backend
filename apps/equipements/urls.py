@@ -4,7 +4,7 @@ from .views import (
     UsineViewSet, ZoneViewSet, LigneProductionViewSet,
     MachineViewSet, ComposantViewSet, DocumentViewSet,
     SensorViewSet, ReadingViewSet, InspectionVisuelleViewSet,
-    UserScopeViewSet,
+    UserScopeViewSet, OrdreTravailViewSet, MaintenanceRecurrenteViewSet,
 )
 
 router = DefaultRouter()
@@ -18,6 +18,8 @@ router.register(r'capteurs', SensorViewSet, basename='capteur')
 router.register(r'readings', ReadingViewSet, basename='reading')
 router.register(r'inspections', InspectionVisuelleViewSet, basename='inspection')
 router.register(r'perimetres', UserScopeViewSet, basename='perimetre')
+router.register(r'ordres-travail', OrdreTravailViewSet, basename='ordre-travail')
+router.register(r'maintenances-recurrentes', MaintenanceRecurrenteViewSet, basename='maintenance-recurrente')
 
 urlpatterns = [
     path('hierarchie/export_csv/', UsineViewSet.as_view({'get': 'export_csv'}), name='hierarchie-export-csv'),

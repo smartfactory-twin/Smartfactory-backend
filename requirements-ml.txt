@@ -1,0 +1,2 @@
+# Dépendance facultative pour entraîner et servir le modèle de maintenance RUL.
+scikit-learn==1.7.2

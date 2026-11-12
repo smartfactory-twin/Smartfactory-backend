@@ -13,6 +13,7 @@ from django.utils.http import urlsafe_base64_encode, urlsafe_base64_decode
 from django.utils.encoding import force_bytes, force_str
 from django.conf import settings
 from django.db import transaction
+import logging
 import secrets
 import string
 
@@ -33,6 +34,7 @@ from .throttles import LoginThrottle, PasswordResetThrottle
 from .email_utils import send_html_email, LOGO_CID
 
 User = get_user_model()
+logger = logging.getLogger(__name__)
 
 
 # Champs d'affectation acceptés dans le payload `perimetres`.
@@ -168,33 +170,8 @@ class LoginView(TokenObtainPairView):
         try:
             candidate = User.objects.get(email=email)
             if candidate.check_password(password):
-                # Forçage du changement de mot de passe au premier login
-                if candidate.must_reset_password:
-                    # Vérifier si le délai de 48h a expiré
-                    if candidate.is_temp_password_expired:
-                        if candidate.actif:
-                            candidate.actif = False
-                            candidate.save(update_fields=['actif'])
-                        return Response(
-                            {
-                                'error': 'Le délai de 48 heures pour définir votre mot de passe a expiré. Votre compte est inactif. Veuillez contacter un administrateur.'
-                            },
-                            status=status.HTTP_403_FORBIDDEN
-                        )
-                    # Premier login autorisé dans le délai de 48h
-                    uid = urlsafe_base64_encode(force_bytes(candidate.pk))
-                    token = default_token_generator.make_token(candidate)
-                    return Response(
-                        {
-                            'must_reset_password': True,
-                            'uid': uid,
-                            'token': token,
-                            'detail': 'Vous devez changer votre mot de passe avant de continuer.',
-                        },
-                        status=status.HTTP_200_OK
-                    )
-
-                # Compte inactif classique
+                # Un mot de passe temporaire généré et transmis par e-mail
+                # permet la première connexion; le changement reste facultatif.
                 if not candidate.actif:
                     return Response(
                         {'error': 'Ce compte est inactif. Contactez un administrateur.'},
@@ -565,6 +542,28 @@ class PasswordResetConfirmView(APIView):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
+        profile_fields = ('nom', 'prenom', 'email')
+        if user.must_reset_password and user.is_superuser:
+            missing = [field for field in profile_fields if not serializer.validated_data.get(field)]
+            if missing:
+                return Response(
+                    {'error': 'Le nom, le prénom et l’adresse e-mail sont obligatoires pour activer votre compte.'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+        new_email = serializer.validated_data.get('email')
+        if new_email and User.objects.exclude(pk=user.pk).filter(email__iexact=new_email).exists():
+            return Response(
+                {'email': ['Cette adresse e-mail est déjà utilisée.']},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        for field in profile_fields:
+            value = serializer.validated_data.get(field)
+            if value:
+                cleaned_value = value.strip() if isinstance(value, str) else value
+                setattr(user, field, cleaned_value.lower() if field == 'email' else cleaned_value)
+
         user.set_password(serializer.validated_data['new_password'])
         user.must_reset_password = False
         user.actif = True  # Activé avec succès dès le premier login / changement de mot de passe
@@ -665,8 +664,8 @@ class AdminUserCreateView(generics.CreateAPIView):
                     nom=serializer.validated_data['nom'],
                     prenom=serializer.validated_data['prenom'],
                     role=role,
-                    must_reset_password=True,
-                    actif=False,  # Inactif par défaut jusqu'au premier login (changement de mot de passe)
+                    must_reset_password=False,
+                    actif=True,
                 )
                 if scope_payloads:
                     _appliquer_perimetres(user, scope_payloads)
@@ -675,7 +674,9 @@ class AdminUserCreateView(generics.CreateAPIView):
             return Response({'perimetres': [exc.message]}, status=status.HTTP_400_BAD_REQUEST)
 
         login_url  = f"{settings.FRONTEND_URL}/login"
-        send_html_email(
+        email_sent = True
+        try:
+            send_html_email(
             subject='Votre compte SmartFactory Twin a été créé',
             text_body=(
                 f"Bonjour {user.prenom},\n\n"
@@ -683,7 +684,7 @@ class AdminUserCreateView(generics.CreateAPIView):
                 f"Email : {user.email}\n"
                 f"Mot de passe temporaire : {password}\n\n"
                 f"Connectez-vous ici : {login_url}\n\n"
-                f"Important : Vous disposez de 48 heures pour vous connecter et définir votre nouveau mot de passe. Passé ce délai, votre mot de passe temporaire expirera et votre compte restera inactif.\n\n"
+                f"Vous pouvez utiliser ces identifiants pour vous connecter. Vous pourrez modifier votre mot de passe depuis votre profil quand vous le souhaitez.\n\n"
                 f"L'équipe SmartFactory Twin"
             ),
 
@@ -765,7 +766,7 @@ class AdminUserCreateView(generics.CreateAPIView):
                   <circle cx="12" cy="17" r="1" fill="#c2410c"/>
                 </svg>
                 <p style="margin:0;color:#9a3412;font-size:13px;line-height:1.6;">
-                  <strong>Sécurité :</strong> vous devrez changer ce mot de passe temporaire lors de votre première connexion. Il ne pourra pas être ignoré.
+                  <strong>Conseil de sécurité :</strong> vous pouvez modifier ce mot de passe depuis votre profil après connexion.
                 </p>
               </div>
 
@@ -816,11 +817,18 @@ class AdminUserCreateView(generics.CreateAPIView):
 </body>
 </html>""",
             to_email=user.email,
-            fail_silently=False,
-        )
+                fail_silently=False,
+            )
+        except Exception:
+            logger.exception('Échec de l’envoi du courriel de création pour l’utilisateur %s', user.pk)
+            user.delete()
+            return Response(
+                {'error': 'L’e-mail n’a pas pu être envoyé. Le compte n’a pas été créé. Vérifiez les paramètres SMTP puis réessayez.'},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
 
         return Response(
-            UserSerializer(user).data,
+            {**UserSerializer(user).data, 'email_sent': True},
             status=status.HTTP_201_CREATED
         )
 
@@ -893,7 +901,7 @@ class AdminUserListView(generics.ListAPIView):
     examples=[
         OpenApiExample(
             'Exemple de requête',
-            value={'nom': 'Dupont', 'prenom': 'Jean', 'telephone': '+213 555 123 456'},
+            value={'nom': 'Dupont', 'prenom': 'Jean', 'telephone': '+216 55 123 456'},
             request_only=True,
         ),
         OpenApiExample(
@@ -901,7 +909,7 @@ class AdminUserListView(generics.ListAPIView):
             value={
                 'id': 1, 'nom': 'Dupont', 'prenom': 'Jean',
                 'email': 'jean@example.com', 'role': 'OPERATEUR',
-                'telephone': '+213 555 123 456', 'actif': True,
+                'telephone': '+216 55 123 456', 'actif': True,
             },
             response_only=True,
         ),

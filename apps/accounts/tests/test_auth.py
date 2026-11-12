@@ -528,14 +528,14 @@ class TestUpdateProfile:
         response = api_client.patch(url, {
             'nom': 'Benali',
             'prenom': 'Karim',
-            'telephone': '+213 555 123 456',
+            'telephone': '+216 55 123 456',
         }, format='json')
         assert response.status_code == 200
         assert response.data['nom'] == 'Benali'
         assert response.data['prenom'] == 'Karim'
         regular_user.refresh_from_db()
         assert regular_user.nom == 'Benali'
-        assert regular_user.telephone == '+213 555 123 456'
+        assert regular_user.telephone == '+216 55 123 456cd'
 
     def test_partial_update_only_telephone(self, api_client, regular_user):
         api_client.force_authenticate(user=regular_user)

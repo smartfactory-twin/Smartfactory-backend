@@ -7,11 +7,21 @@ from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView
 from apps.equipements.views import (
     ReadingViewSet, SensorViewSet, InspectionVisuelleViewSet,
 )
+from apps.equipements.predictive_views import PredictiveMaintenanceAPIView
+from apps.equipements.reporting_views import MachineHealthReportAPIView, ReportPdfAPIView
+from apps.equipements.ai_prediction_views import AnomalyAnalysisAPIView, WhatIfAPIView, AiModelsAPIView
 
 urlpatterns = [
     path('admin/', admin.site.urls),
     path('api/auth/', include('apps.accounts.urls')),
     path('api/equipements/', include('apps.equipements.urls')),
+    path('api/predictive-maintenance/', PredictiveMaintenanceAPIView.as_view(),
+         name='predictive-maintenance'),
+    path('api/reports/health/', MachineHealthReportAPIView.as_view(), name='machine-health-report'),
+    path('api/reports/pdf/', ReportPdfAPIView.as_view(), name='report-pdf'),
+    path('api/ai-predictions/anomalies/', AnomalyAnalysisAPIView.as_view(), name='ai-anomalies'),
+    path('api/ai-predictions/what-if/', WhatIfAPIView.as_view(), name='ai-what-if'),
+    path('api/ai-predictions/models/', AiModelsAPIView.as_view(), name='ai-models'),
 
     # ── Module 3 — UC-08 : import CSV de création de capteurs (alias) ──────────
     # CSV → création de Sensor (jamais de mesures). Distinct de UC-09 ci-dessous.
@@ -43,7 +53,8 @@ urlpatterns = [
     # GET  /api/inspections/            historique paginé/filtrable
     # GET  /api/inspections/{id}/       détail
     # POST /api/inspections/{id}/analyze/  lance l'analyse IA
-    # DELETE /api/inspections/{id}/     suppression (ADMIN)
+    # DELETE /api/inspections/{id}/     suppression (ADMIN / TECHNICIEN autorisé)
+    # POST /api/equipements/inspections/{id}/annotate/ enregistre l'image annotée
     path('api/inspections/',
          InspectionVisuelleViewSet.as_view({'get': 'list', 'post': 'create'}),
          name='inspections-list'),

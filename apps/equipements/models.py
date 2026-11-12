@@ -1,4 +1,5 @@
 from django.db import models
+from django.utils import timezone
 
 
 class Usine(models.Model):
@@ -46,6 +47,15 @@ class LigneProduction(models.Model):
 
 
 class Machine(models.Model):
+    class TypeEquipement(models.TextChoices):
+        COMPRESSEUR = 'COMPRESSEUR', 'Compresseur'
+        POMPE = 'POMPE', 'Pompe'
+        MOTEUR = 'MOTEUR', 'Moteur'
+        CONVOYEUR = 'CONVOYEUR', 'Convoyeur'
+        TURBINE = 'TURBINE', 'Turbine'
+        PRESSE = 'PRESSE', 'Presse'
+        AUTRE = 'AUTRE', 'Autre'
+
     class Statut(models.TextChoices):
         NORMAL = 'NORMAL', 'Normal'
         DEGRADE = 'DEGRADE', 'Dégradé'
@@ -55,6 +65,12 @@ class Machine(models.Model):
     nom = models.CharField(max_length=200)
     identifiant_interne = models.CharField(max_length=100, unique=True)
     numero_serie = models.CharField(max_length=100, blank=True, default='')
+    type_equipement = models.CharField(
+        max_length=20,
+        choices=TypeEquipement.choices,
+        blank=True,
+        default='',
+    )
     marque = models.CharField(max_length=100, blank=True, default='')
     modele = models.CharField(max_length=100, blank=True, default='')
     date_installation = models.DateField(null=True, blank=True)
@@ -233,15 +249,40 @@ class InspectionVisuelle(models.Model):
         TERMINEE = 'TERMINEE', 'Terminée'
         ERREUR = 'ERREUR', 'Erreur'
 
+    class TypeMedia(models.TextChoices):
+        IMAGE = 'IMAGE', 'Image'
+        VIDEO = 'VIDEO', 'Vidéo'
+
     machine = models.ForeignKey(
         Machine,
         on_delete=models.CASCADE,
         related_name='inspections',
         verbose_name="Machine inspectée",
     )
-    image = models.ImageField(
+    # FileField conserve la compatibilité de l'API `image` tout en permettant
+    # les clips MP4 demandés pour la galerie d'inspection.
+    image = models.FileField(
         upload_to='inspections/images/',
+        blank=True,
+        default='',
         verbose_name="Image inspectée",
+    )
+    media_type = models.CharField(
+        max_length=8,
+        choices=TypeMedia.choices,
+        default=TypeMedia.IMAGE,
+        verbose_name="Type de média",
+    )
+    image_annotee = models.FileField(
+        upload_to='inspections/annotated/',
+        blank=True,
+        default='',
+        verbose_name="Image annotée",
+    )
+    annotations = models.JSONField(
+        blank=True,
+        default=list,
+        verbose_name="Annotations visuelles",
     )
     date_inspection = models.DateTimeField(
         auto_now_add=True, verbose_name="Date d'inspection"
@@ -424,3 +465,74 @@ class UserScope(models.Model):
         if self.date_fin and self.date_fin <= now:
             return False
         return True
+
+
+class OrdreTravail(models.Model):
+    """Ordre de travail durable pour le workflow CMMS du projet."""
+
+    class Type(models.TextChoices):
+        CORRECTIVE = 'Corrective', 'Corrective'
+        PREVENTIVE = 'Préventive', 'Préventive'
+        INSPECTION = 'Inspection', 'Inspection'
+
+    class Priorite(models.TextChoices):
+        HAUTE = 'Haute', 'Haute'
+        MOYENNE = 'Moyenne', 'Moyenne'
+        BASSE = 'Basse', 'Basse'
+
+    class Statut(models.TextChoices):
+        CREE = 'Créé', 'Créé'
+        ASSIGNE = 'Assigné', 'Assigné'
+        EN_COURS = 'En cours', 'En cours'
+        ATTENTE_PIECES = 'En attente pièces', 'En attente pièces'
+        RAPPORT_DEPOSE = 'Rapport déposé', 'Rapport déposé'
+        VALIDE = 'Validé', 'Validé'
+        CLOTURE = 'Clôturé', 'Clôturé'
+
+    machine = models.ForeignKey(Machine, on_delete=models.CASCADE, related_name='ordres_travail')
+    type_ordre = models.CharField(max_length=20, choices=Type.choices, default=Type.CORRECTIVE)
+    priorite = models.CharField(max_length=10, choices=Priorite.choices, default=Priorite.MOYENNE)
+    titre = models.CharField(max_length=300)
+    assigne = models.CharField(max_length=150, blank=True, default='')
+    statut = models.CharField(max_length=30, choices=Statut.choices, default=Statut.CREE)
+    echeance = models.DateTimeField(null=True, blank=True)
+    from_alert = models.PositiveIntegerField(null=True, blank=True)
+    historique = models.JSONField(default=list, blank=True)
+    rapport = models.JSONField(null=True, blank=True)
+    cree_par = models.ForeignKey(
+        'accounts.Utilisateur', on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='ordres_travail_crees',
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = 'Ordre de travail'
+        verbose_name_plural = 'Ordres de travail'
+        ordering = ['-created_at', '-pk']
+
+    def __str__(self):
+        return f'OT {self.pk} — {self.machine.nom} ({self.statut})'
+
+
+class MaintenanceRecurrente(models.Model):
+    """Plan périodique utilisé pour projeter les entretiens au calendrier."""
+
+    machine = models.ForeignKey(Machine, on_delete=models.CASCADE, related_name='maintenances_recurrentes')
+    titre = models.CharField(max_length=200)
+    frequence_jours = models.PositiveIntegerField(default=30)
+    date_debut = models.DateField(default=timezone.localdate)
+    cree_par = models.ForeignKey(
+        'accounts.Utilisateur', on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='maintenances_recurrentes_creees',
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = 'Maintenance préventive récurrente'
+        verbose_name_plural = 'Maintenances préventives récurrentes'
+        ordering = ['date_debut', 'pk']
+
+    def __str__(self):
+        return f'{self.titre} — {self.machine.nom} (tous les {self.frequence_jours} jours)'

@@ -13,7 +13,7 @@ CSV_COLUMNS = [
     'usine_nom', 'usine_adresse', 'usine_description',
     'zone_nom', 'zone_description',
     'ligne_nom', 'ligne_description',
-    'machine_identifiant', 'machine_nom', 'machine_numero_serie',
+    'machine_identifiant', 'machine_nom', 'machine_numero_serie', 'machine_type_equipement',
     'machine_marque', 'machine_modele', 'machine_date_installation',
     'machine_statut', 'machine_description',
     'composant_nom', 'composant_numero_piece', 'composant_description'
@@ -56,6 +56,8 @@ HEADER_ALIASES = {
     'nom_machine': 'machine_nom',
     'machine_numero_serie': 'machine_numero_serie',
     'numero_serie': 'machine_numero_serie',
+    'machine_type_equipement': 'machine_type_equipement',
+    'type_equipement': 'machine_type_equipement',
     'machine_marque': 'machine_marque',
     'marque': 'machine_marque',
     'machine_modele': 'machine_modele',
@@ -152,13 +154,14 @@ def validate_and_parse_hierarchy_csv(file_obj):
         machine_identifiant = normalized.get('machine_identifiant', '')
         machine_nom = normalized.get('machine_nom', '')
         machine_statut = normalized.get('machine_statut', '').upper()
+        machine_type = normalized.get('machine_type_equipement', '').upper()
         machine_date = normalized.get('machine_date_installation', '')
 
         # Si des informations machine sont données
         has_machine_fields = bool(
             machine_identifiant or machine_nom or
             normalized.get('machine_numero_serie') or normalized.get('machine_marque') or
-            normalized.get('machine_modele') or machine_date or machine_statut or
+            normalized.get('machine_modele') or machine_type or machine_date or machine_statut or
             normalized.get('machine_description')
         )
 
@@ -174,6 +177,8 @@ def validate_and_parse_hierarchy_csv(file_obj):
 
             if machine_statut and machine_statut not in VALID_STATUTS:
                 row_errors.append(f"Statut machine '{machine_statut}' invalide. Valeurs acceptées: {', '.join(VALID_STATUTS)}.")
+            if machine_type and machine_type not in Machine.TypeEquipement.values:
+                row_errors.append(f"Type de machine '{machine_type}' invalide. Valeurs acceptées: {', '.join(Machine.TypeEquipement.values)}.")
 
             if machine_date:
                 parsed_d = parse_date(machine_date)
@@ -342,6 +347,7 @@ def execute_hierarchy_import(valid_rows):
             if machine_identifiant:
                 machine_nom = row.get('machine_nom') or machine_identifiant
                 machine_serie = row.get('machine_numero_serie', '')
+                machine_type = row.get('machine_type_equipement', '').upper()
                 machine_marque = row.get('machine_marque', '')
                 machine_modele = row.get('machine_modele', '')
                 machine_statut = row.get('machine_statut', '').upper() or Machine.Statut.NORMAL
@@ -355,6 +361,8 @@ def execute_hierarchy_import(valid_rows):
                         existing.nom = machine_nom
                     if machine_serie:
                         existing.numero_serie = machine_serie
+                    if machine_type in Machine.TypeEquipement.values:
+                        existing.type_equipement = machine_type
                     if machine_marque:
                         existing.marque = machine_marque
                     if machine_modele:
@@ -375,6 +383,7 @@ def execute_hierarchy_import(valid_rows):
                         identifiant_interne=machine_identifiant,
                         nom=machine_nom,
                         numero_serie=machine_serie,
+                        type_equipement=machine_type if machine_type in Machine.TypeEquipement.values else '',
                         marque=machine_marque,
                         modele=machine_modele,
                         date_installation=parsed_date,

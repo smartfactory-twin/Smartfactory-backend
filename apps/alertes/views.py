@@ -199,6 +199,8 @@ class AlerteViewSet(viewsets.ReadOnlyModelViewSet):
         return Response({
             'total': queryset.count(),
             'actives': actives.count(),
+            # Compteur UC-11 : machines distinctes portant au moins une alerte active.
+            'machines_en_alerte': actives.values('machine_id').distinct().count(),
             'acquittees': queryset.filter(statut=Alerte.Statut.ACKNOWLEDGED).count(),
             'resolues': queryset.filter(statut=Alerte.Statut.RESOLVED).count(),
             'critiques': actives.filter(niveau=Alerte.Niveau.CRITIQUE).count(),

@@ -102,17 +102,20 @@ class NotificationService:
     def destinataires_pour_machine(machine):
         """Utilisateurs actifs dont le périmètre `UserScope` ouvre `machine`.
 
-        `ADMIN` est volontairement exclu : son accès est global, il voit
-        toutes les alertes dans la liste et n'a pas besoin de notification.
-        La vérification passe obligatoirement par
+        Les `ADMIN` reçoivent les notifications sans filtre de périmètre ;
+        techniciens et opérateurs sont filtrés par
         `equipements.permissions.accessible_machine_ids()`.
         """
         from apps.accounts.models import Utilisateur
 
         accessibles = []
         for utilisateur in Utilisateur.objects.filter(
-            actif=True, role__in=[Utilisateur.Role.TECHNICIEN, Utilisateur.Role.OPERATEUR]
+            actif=True,
+            role__in=[Utilisateur.Role.ADMIN, Utilisateur.Role.TECHNICIEN, Utilisateur.Role.OPERATEUR],
         ):
+            if utilisateur.role == Utilisateur.Role.ADMIN:
+                accessibles.append(utilisateur)
+                continue
             from apps.equipements.permissions import accessible_machine_ids
 
             if machine.pk in set(accessible_machine_ids(utilisateur)):

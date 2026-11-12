@@ -37,9 +37,7 @@ docker compose up --build
 # http://localhost:8000/api/docs/
 ```
 
-Le superuser de démonstration est créé automatiquement :
-- **Email** : `admin@smartfactory.dz`
-- **Mot de passe** : `Admin@2024!`
+Le compte de démonstration est `admin@smartfactory.com` avec le mot de passe initial `Admin@2026!`. Au premier accès, il doit compléter son nom, son prénom, son adresse e-mail et choisir un nouveau mot de passe. Change ces identifiants après le premier lancement. Pour envoyer les e-mails, configure `EMAIL_HOST_USER`, `DEFAULT_FROM_EMAIL` et un vrai `EMAIL_HOST_PASSWORD` SMTP dans `.env` ; Gmail nécessite un mot de passe d’application.
 
 ## Démarrage local (sans Docker)
 

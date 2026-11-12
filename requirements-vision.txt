@@ -1,0 +1,3 @@
+# Dépendance facultative pour le backend `VISION_AI_BACKEND=yolo`.
+# Les poids entraînés doivent être fournis séparément.
+ultralytics>=8.3,<9

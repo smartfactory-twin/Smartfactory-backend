@@ -16,9 +16,9 @@ DJANGO_APPS = [
     'django.contrib.contenttypes',
     'django.contrib.sessions',
     'django.contrib.messages',
-    'django.contrib.staticfiles',
 ]
 THIRD_PARTY_APPS = [
+    'channels',
     'rest_framework',
     'rest_framework_simplejwt',
     'rest_framework_simplejwt.token_blacklist',
@@ -31,7 +31,8 @@ LOCAL_APPS = [
     'apps.equipements',
     'apps.alertes',
 ]
-INSTALLED_APPS = DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS
+# Daphne doit précéder django.contrib.staticfiles (contrôle système daphne.E001).
+INSTALLED_APPS = ['daphne'] + DJANGO_APPS + ['django.contrib.staticfiles'] + THIRD_PARTY_APPS + LOCAL_APPS
 
 # ─── Middleware ────────────────────────────────────────────────────────────────
 MIDDLEWARE = [
@@ -64,6 +65,13 @@ TEMPLATES = [
 ]
 
 WSGI_APPLICATION = 'core.wsgi.application'
+ASGI_APPLICATION = 'core.asgi.application'
+
+# Sprint 3 : couche temps réel. La couche mémoire convient au développement
+# local mono-processus ; un Redis partagé sera nécessaire en déploiement.
+CHANNEL_LAYERS = {
+    'default': {'BACKEND': 'channels.layers.InMemoryChannelLayer'},
+}
 
 # ─── Base de données PostgreSQL ───────────────────────────────────────────────
 DATABASES = {
@@ -111,8 +119,15 @@ MEDIA_ROOT = BASE_DIR / 'media'
 # ─── Module 4 — Inspection visuelle par IA ───────────────────────────────────
 # Backend du service d'analyse (remplaçable : 'mock' par défaut).
 VISION_AI_BACKEND = config('VISION_AI_BACKEND', default='mock')
+VISION_AI_MODEL_PATH = config('VISION_AI_MODEL_PATH', default='')
+VISION_AI_CONFIDENCE_THRESHOLD = config(
+    'VISION_AI_CONFIDENCE_THRESHOLD', default=0.25, cast=float
+)
 # Taille maximale acceptée pour une image d'inspection (Mo).
-INSPECTION_IMAGE_MAX_MB = config('INSPECTION_IMAGE_MAX_MB', default=5, cast=int)
+INSPECTION_IMAGE_MAX_MB = config('INSPECTION_IMAGE_MAX_MB', default=20, cast=int)
+CMAPSS_MODEL_PATH = config(
+    'CMAPSS_MODEL_PATH', default=str(BASE_DIR / 'ml' / 'artifacts' / 'cmapss_rul.joblib')
+)
 
 # ─── Module 8 — Alertes & Notifications (UC-26 → UC-29) ──────────────────────
 # Les seuils des alertes ne sont PAS stockés ici : ils restent ceux des
@@ -219,7 +234,7 @@ SPECTACULAR_SETTINGS = {
 }
 
 # ─── Email ───────────────────────────────────────────────────────────────────
-EMAIL_BACKEND = config('EMAIL_BACKEND', default='django.core.mail.backends.console.EmailBackend')
+EMAIL_BACKEND = config('EMAIL_BACKEND', default='django.core.mail.backends.smtp.EmailBackend')
 EMAIL_HOST = config('EMAIL_HOST', default='localhost')
 EMAIL_PORT = config('EMAIL_PORT', default=587, cast=int)
 EMAIL_USE_TLS = config('EMAIL_USE_TLS', default=True, cast=bool)
@@ -273,8 +288,8 @@ for _p in _logo_candidates:
 
 # ─── Réinitialisation de mot de passe ────────────────────────────────────────
 # Durée de validité du token de réinitialisation : 1 heure (3600 secondes)
-PASSWORD_RESET_TIMEOUT = 3600
+PASSWORD_RESET_TIMEOUT = 48 * 60 * 60
 
 # ─── Démo superuser ──────────────────────────────────────────────────────────
-DEMO_ADMIN_EMAIL = config('DEMO_ADMIN_EMAIL', default='admin@smartfactory.dz')
-DEMO_ADMIN_PASSWORD = config('DEMO_ADMIN_PASSWORD', default='Admin@2024!')
+DEMO_ADMIN_EMAIL = config('DEMO_ADMIN_EMAIL', default='admin@smartfactory.com')
+DEMO_ADMIN_PASSWORD = config('DEMO_ADMIN_PASSWORD', default='Admin@2026!')

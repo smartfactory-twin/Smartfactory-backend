@@ -185,6 +185,20 @@ class IsAdminRole(BasePermission):
         )
 
 
+class WorkOrderRolePermission(BasePermission):
+    """Les OT sont consultables par les rôles authentifiés, traités par ADMIN/TECHNICIEN."""
+
+    def has_permission(self, request, view):
+        if not request.user or not request.user.is_authenticated:
+            return False
+        if request.method in SAFE_METHODS:
+            return True
+        return getattr(request.user, 'role', None) in ('ADMIN', 'TECHNICIEN')
+
+    def has_object_permission(self, request, view, obj):
+        return self.has_permission(request, view)
+
+
 class ReadingAccessPermission(BasePermission):
     """
     Mesures de capteurs (Module 3).
@@ -211,13 +225,13 @@ class InspectionAccessPermission(BasePermission):
     """
     Inspections visuelles par IA (Module 4).
     ADMIN     : toutes les opérations (création, analyse, suppression).
-    TECHNICIEN: lecture + création + analyse (POST), pas de suppression.
+    TECHNICIEN: lecture + création + analyse + suppression (selon UC-18).
     OPERATEUR : lecture seule (GET, HEAD, OPTIONS).
 
-    L'action POST `analyze` étant une méthode POST, elle est couverte pour
-    ADMIN et TECHNICIEN ; la suppression (DELETE) reste réservée à ADMIN.
+    Les actions d'écriture sont réservées aux rôles ADMIN et TECHNICIEN ;
+    ScopedMachineAccess limite leur périmètre aux machines autorisées.
     """
-    TECHNICIEN_METHODS = (*SAFE_METHODS, 'POST')
+    TECHNICIEN_METHODS = (*SAFE_METHODS, 'POST', 'DELETE')
 
     def has_permission(self, request, view):
         if not request.user or not request.user.is_authenticated:

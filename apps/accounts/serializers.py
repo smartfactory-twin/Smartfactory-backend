@@ -123,6 +123,19 @@ class PasswordResetConfirmSerializer(serializers.Serializer):
         write_only=True, required=True,
         style={'input_type': 'password'}
     )
+    nom = serializers.CharField(required=False, allow_blank=True, max_length=100)
+    prenom = serializers.CharField(required=False, allow_blank=True, max_length=100)
+    email = serializers.EmailField(required=False)
+
+    def validate_nom(self, value):
+        if not value.strip():
+            raise serializers.ValidationError('Le nom est obligatoire.')
+        return value.strip()
+
+    def validate_prenom(self, value):
+        if not value.strip():
+            raise serializers.ValidationError('Le prénom est obligatoire.')
+        return value.strip()
 
     def validate(self, attrs):
         if attrs['new_password'] != attrs['new_password_confirm']:
@@ -187,7 +200,7 @@ class UpdateProfileSerializer(serializers.ModelSerializer):
         cleaned = value.strip()
         if cleaned and not re.match(r'^[\d\s\+\-\(\)]{6,20}$', cleaned):
             raise serializers.ValidationError(
-                'Format invalide. Ex: +213 555 123 456 ou 0555123456.'
+                'Format invalide. '
             )
         return cleaned
 

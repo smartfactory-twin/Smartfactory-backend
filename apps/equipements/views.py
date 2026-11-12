@@ -1,19 +1,24 @@
 import csv
 import io
 from django.utils.dateparse import parse_date
+from django.utils import timezone
+from django.db.models import OuterRef, Subquery
 from rest_framework import viewsets, status
+from rest_framework.pagination import PageNumberPagination
 from rest_framework.decorators import action
 from rest_framework.response import Response
+from rest_framework.exceptions import PermissionDenied
 from rest_framework.filters import SearchFilter, OrderingFilter
 from rest_framework.permissions import IsAuthenticated
 from django_filters.rest_framework import DjangoFilterBackend
 
-from .models import Usine, Zone, LigneProduction, Machine, Document, Composant, Sensor, Reading, InspectionVisuelle, UserScope
+from .models import Usine, Zone, LigneProduction, Machine, Document, Composant, Sensor, Reading, InspectionVisuelle, UserScope, OrdreTravail, MaintenanceRecurrente
 from .permissions import (
     IsAdminOrReadOnly, MachineAccessPermission, IsAdminRole, ReadingAccessPermission,
     InspectionAccessPermission, ScopedMachineAccess,
     scope_queryset_machine, scope_queryset_sensor, scope_queryset_reading,
     scope_queryset_inspection, scope_queryset_machine_child,
+    WorkOrderRolePermission, accessible_machine_ids,
 )
 from .serializers import (
     UsineSerializer, UsineHierarchieSerializer,
@@ -21,8 +26,9 @@ from .serializers import (
     ComposantSerializer, DocumentSerializer,
     MachineListSerializer, MachineDetailSerializer, MachineCreateUpdateSerializer,
     SensorSerializer, SensorListSerializer, SensorDetailSerializer, ReadingSerializer,
-    InspectionVisuelleSerializer, InspectionCreateSerializer,
-    UserScopeSerializer, MonPerimetreSerializer,
+    InspectionVisuelleSerializer, InspectionCreateSerializer, InspectionAnnotationSerializer,
+    UserScopeSerializer, MonPerimetreSerializer, OrdreTravailSerializer,
+    MaintenanceRecurrenteSerializer, RapportInterventionSerializer,
 )
 from .csv_hierarchy import (
     validate_and_parse_hierarchy_csv,
@@ -126,14 +132,21 @@ class LigneProductionViewSet(viewsets.ModelViewSet):
 
 
 class MachineViewSet(viewsets.ModelViewSet):
+    latest_reading = Reading.objects.filter(
+        sensor__machine=OuterRef('pk'), est_valide=True
+    ).order_by('-timestamp', '-pk')
     queryset = Machine.objects.select_related(
         'ligne_production',
         'ligne_production__zone',
         'ligne_production__zone__usine'
-    ).prefetch_related('composants', 'documents').all()
+    ).prefetch_related('composants', 'documents').annotate(
+        derniere_valeur=Subquery(latest_reading.values('valeur')[:1]),
+        derniere_unite=Subquery(latest_reading.values('sensor__unite')[:1]),
+        derniere_lecture_at=Subquery(latest_reading.values('timestamp')[:1]),
+    )
     permission_classes = [MachineAccessPermission, ScopedMachineAccess]
     filter_backends = [DjangoFilterBackend, SearchFilter, OrderingFilter]
-    filterset_fields = ['statut', 'ligne_production__zone', 'ligne_production__zone__usine']
+    filterset_fields = ['statut', 'type_equipement', 'ligne_production__zone', 'ligne_production__zone__usine']
     search_fields = ['nom', 'identifiant_interne', 'numero_serie']
     ordering_fields = ['nom', 'created_at', 'statut']
 
@@ -207,6 +220,12 @@ class MachineViewSet(viewsets.ModelViewSet):
                                    'message': f'statut "{statut}" invalide. Valeurs acceptées: {valid_statuts}'})
                     continue
 
+                type_equipement = row.get('type_equipement', '').strip().upper()
+                if type_equipement and type_equipement not in Machine.TypeEquipement.values:
+                    errors.append({'row': i, 'field': 'type_equipement',
+                                   'message': f'type_equipement "{type_equipement}" invalide.'})
+                    continue
+
                 date_installation = None
                 raw_date = row.get('date_installation', '').strip()
                 if raw_date:
@@ -230,6 +249,7 @@ class MachineViewSet(viewsets.ModelViewSet):
                     nom=nom,
                     identifiant_interne=identifiant,
                     numero_serie=row.get('numero_serie', '').strip(),
+                    type_equipement=type_equipement,
                     marque=row.get('marque', '').strip(),
                     modele=row.get('modele', '').strip(),
                     date_installation=date_installation,
@@ -345,9 +365,16 @@ class SensorViewSet(viewsets.ModelViewSet):
 
 # ── Lectures ────────────────────────────────────────────────────────────────────
 
+class ReadingPagination(PageNumberPagination):
+    page_size = 25
+    page_size_query_param = 'page_size'
+    max_page_size = 200
+
+
 class ReadingViewSet(viewsets.ModelViewSet):
     queryset = Reading.objects.select_related('sensor', 'sensor__machine').all()
     serializer_class = ReadingSerializer
+    pagination_class = ReadingPagination
     permission_classes = [ReadingAccessPermission, ScopedMachineAccess]
     filter_backends = [DjangoFilterBackend, OrderingFilter]
     filterset_fields = {
@@ -502,11 +529,24 @@ class InspectionVisuelleViewSet(viewsets.ModelViewSet):
         out = InspectionVisuelleSerializer(inspection, context={'request': request})
         return Response(out.data, status=status.HTTP_201_CREATED)
 
+    def perform_destroy(self, instance):
+        # Supprimer également les objets dans MEDIA_ROOT, pas seulement la ligne SQL.
+        for field_name in ('image', 'image_annotee'):
+            stored_file = getattr(instance, field_name)
+            if stored_file:
+                stored_file.delete(save=False)
+        instance.delete()
+
     @action(detail=True, methods=['post'], url_path='analyze',
             permission_classes=[InspectionAccessPermission])
     def analyze(self, request, pk=None):
         """Lance l'analyse IA de l'image d'une inspection (module 4)."""
         inspection = self.get_object()
+        if inspection.media_type != InspectionVisuelle.TypeMedia.IMAGE:
+            return Response(
+                {'detail': 'L’analyse de vision accepte les images. Les vidéos restent consultables dans la galerie.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         inspection.statut_analyse = InspectionVisuelle.StatutAnalyse.EN_ANALYSE
         inspection.erreur_message = ''
         inspection.save(update_fields=['statut_analyse', 'erreur_message', 'updated_at'])
@@ -547,6 +587,25 @@ class InspectionVisuelleViewSet(viewsets.ModelViewSet):
             'resultat_analyse', 'score_confiance', 'defect_detected', 'defect_type',
             'confidence', 'observation', 'statut_analyse', 'updated_at',
         ])
+        out = InspectionVisuelleSerializer(inspection, context={'request': request})
+        return Response(out.data, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=['post'], url_path='annotate',
+            permission_classes=[InspectionAccessPermission])
+    def annotate(self, request, pk=None):
+        """Enregistre l'image composée et les annotations du technicien."""
+        inspection = self.get_object()
+        if inspection.media_type != InspectionVisuelle.TypeMedia.IMAGE:
+            return Response({'detail': 'Seules les images peuvent être annotées.'},
+                            status=status.HTTP_400_BAD_REQUEST)
+        serializer = InspectionAnnotationSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        old_annotated_image = inspection.image_annotee
+        inspection.image_annotee = serializer.validated_data['image']
+        inspection.annotations = serializer.validated_data['annotations']
+        inspection.save(update_fields=['image_annotee', 'annotations', 'updated_at'])
+        if old_annotated_image and old_annotated_image.name != inspection.image_annotee.name:
+            old_annotated_image.delete(save=False)
         out = InspectionVisuelleSerializer(inspection, context={'request': request})
         return Response(out.data, status=status.HTTP_200_OK)
 
@@ -596,4 +655,68 @@ class UserScopeViewSet(viewsets.ModelViewSet):
     def mon_perimetre(self, request):
         """Périmètre résolu de l'utilisateur connecté (lecture seule)."""
         return Response(MonPerimetreSerializer(request.user).data)
+
+
+class OrdreTravailViewSet(viewsets.ModelViewSet):
+    serializer_class = OrdreTravailSerializer
+    permission_classes = [IsAuthenticated, WorkOrderRolePermission, ScopedMachineAccess]
+    filter_backends = [DjangoFilterBackend, SearchFilter, OrderingFilter]
+    filterset_fields = ['machine', 'statut', 'type_ordre', 'priorite']
+    search_fields = ['titre', 'machine__nom', 'machine__identifiant_interne', 'assigne']
+    ordering_fields = ['created_at', 'echeance', 'priorite', 'statut']
+    ordering = ['-created_at']
+
+    def get_queryset(self):
+        qs = OrdreTravail.objects.select_related('machine', 'cree_par')
+        if getattr(self.request.user, 'role', None) == 'ADMIN':
+            return qs
+        return qs.filter(machine_id__in=accessible_machine_ids(self.request.user))
+
+    def perform_create(self, serializer):
+        machine = serializer.validated_data['machine']
+        if getattr(self.request.user, 'role', None) != 'ADMIN' and machine.pk not in set(accessible_machine_ids(self.request.user)):
+            raise PermissionDenied("Cette machine n’est pas dans votre périmètre d’accès.")
+        serializer.save(cree_par=self.request.user)
+
+    def perform_update(self, serializer):
+        machine = serializer.validated_data.get('machine', serializer.instance.machine)
+        if getattr(self.request.user, 'role', None) != 'ADMIN' and machine.pk not in set(accessible_machine_ids(self.request.user)):
+            raise PermissionDenied("Cette machine n’est pas dans votre périmètre d’accès.")
+        serializer.save()
+
+    @action(detail=True, methods=['post'], url_path='rapport')
+    def rapport_intervention(self, request, pk=None):
+        ordre = self.get_object()
+        if ordre.statut not in (OrdreTravail.Statut.EN_COURS, OrdreTravail.Statut.ATTENTE_PIECES):
+            return Response({'detail': 'Le rapport peut être déposé uniquement lorsque l’OT est en cours ou en attente de pièces.'}, status=status.HTTP_400_BAD_REQUEST)
+        serializer = RapportInterventionSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        ordre.rapport = {**serializer.validated_data, 'date_depot': timezone.now().isoformat()}
+        ordre.statut = OrdreTravail.Statut.RAPPORT_DEPOSE
+        ordre.historique = [*ordre.historique, {'statut': ordre.statut, 'date': timezone.now().isoformat()}]
+        ordre.save(update_fields=['rapport', 'statut', 'historique', 'updated_at'])
+        return Response(self.get_serializer(ordre).data)
+
+
+class MaintenanceRecurrenteViewSet(viewsets.ModelViewSet):
+    serializer_class = MaintenanceRecurrenteSerializer
+    permission_classes = [IsAuthenticated, WorkOrderRolePermission, ScopedMachineAccess]
+
+    def get_queryset(self):
+        qs = MaintenanceRecurrente.objects.select_related('machine', 'cree_par')
+        if getattr(self.request.user, 'role', None) == 'ADMIN':
+            return qs
+        return qs.filter(machine_id__in=accessible_machine_ids(self.request.user))
+
+    def perform_create(self, serializer):
+        machine = serializer.validated_data['machine']
+        if getattr(self.request.user, 'role', None) != 'ADMIN' and machine.pk not in set(accessible_machine_ids(self.request.user)):
+            raise PermissionDenied("Cette machine n’est pas dans votre périmètre d’accès.")
+        serializer.save(cree_par=self.request.user)
+
+    def perform_update(self, serializer):
+        machine = serializer.validated_data.get('machine', serializer.instance.machine)
+        if getattr(self.request.user, 'role', None) != 'ADMIN' and machine.pk not in set(accessible_machine_ids(self.request.user)):
+            raise PermissionDenied("Cette machine n’est pas dans votre périmètre d’accès.")
+        serializer.save()
 

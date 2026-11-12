@@ -1,11 +1,14 @@
 import os
 
+from PIL import Image, UnidentifiedImageError
+
 from django.conf import settings
 
 from rest_framework import serializers
+from django.utils import timezone
 from .models import (
     Usine, Zone, LigneProduction, Machine, Document, Composant, Sensor, Reading,
-    InspectionVisuelle, UserScope,
+    InspectionVisuelle, UserScope, OrdreTravail, MaintenanceRecurrente,
 )
 from .readings_io import normalize_timestamp
 
@@ -70,12 +73,16 @@ class MachineListSerializer(serializers.ModelSerializer):
     zone_nom             = serializers.SerializerMethodField()
     usine_nom            = serializers.SerializerMethodField()
     photo                = serializers.SerializerMethodField()
+    derniere_valeur = serializers.FloatField(read_only=True, allow_null=True)
+    derniere_unite = serializers.CharField(read_only=True, allow_null=True)
+    derniere_lecture_at = serializers.DateTimeField(read_only=True, allow_null=True)
 
     class Meta:
         model = Machine
         fields = [
-            'id', 'nom', 'identifiant_interne', 'numero_serie',
+            'id', 'nom', 'identifiant_interne', 'numero_serie', 'type_equipement',
             'marque', 'modele', 'statut', 'date_installation',
+            'derniere_valeur', 'derniere_unite', 'derniere_lecture_at',
             'ligne_production', 'ligne_production_nom',
             'zone_nom', 'usine_nom', 'photo',
         ]
@@ -123,7 +130,7 @@ class MachineCreateUpdateSerializer(serializers.ModelSerializer):
         model = Machine
         fields = [
             'id', 'nom', 'identifiant_interne', 'numero_serie', 'marque',
-            'modele', 'date_installation', 'position_sur_plan', 'statut',
+            'modele', 'type_equipement', 'date_installation', 'position_sur_plan', 'statut',
             'ligne_production', 'photo', 'description',
         ]
         read_only_fields = ['id']
@@ -143,7 +150,7 @@ class MachineNestedSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Machine
-        fields = ['id', 'nom', 'identifiant_interne', 'statut', 'statut_label', 'composants']
+        fields = ['id', 'nom', 'identifiant_interne', 'type_equipement', 'statut', 'statut_label', 'composants']
 
 
 class LigneNestedSerializer(serializers.ModelSerializer):
@@ -270,8 +277,13 @@ class ReadingSerializer(serializers.ModelSerializer):
 
 # ── Module 4 — Inspections visuelles ──────────────────────────────────────────
 
-ALLOWED_IMAGE_CONTENT_TYPES = {'image/jpeg', 'image/jpg', 'image/png'}
-ALLOWED_IMAGE_EXTENSIONS = {'.jpg', '.jpeg', '.png'}
+ALLOWED_MEDIA_CONTENT_TYPES = {
+    '.jpg': {'image/jpeg', 'image/jpg'},
+    '.jpeg': {'image/jpeg', 'image/jpg'},
+    '.png': {'image/png'},
+    '.webp': {'image/webp'},
+}
+ALLOWED_MEDIA_EXTENSIONS = set(ALLOWED_MEDIA_CONTENT_TYPES)
 
 
 class InspectionVisuelleSerializer(serializers.ModelSerializer):
@@ -290,12 +302,14 @@ class InspectionVisuelleSerializer(serializers.ModelSerializer):
     )
     statut = serializers.CharField(source='statut_analyse', read_only=True)
     image = serializers.SerializerMethodField()
+    image_annotee = serializers.SerializerMethodField()
 
     class Meta:
         model = InspectionVisuelle
         fields = [
             'id', 'machine', 'machine_nom', 'machine_identifiant', 'machine_statut',
             'ligne_nom', 'usine_nom', 'image', 'date_inspection',
+            'media_type', 'image_annotee', 'annotations',
             'utilisateur', 'utilisateur_nom', 'statut_analyse', 'statut_analyse_label',
             'statut', 'defect_detected', 'defect_type', 'confidence', 'observation',
             'resultat_analyse', 'score_confiance', 'observations', 'erreur_message',
@@ -305,6 +319,7 @@ class InspectionVisuelleSerializer(serializers.ModelSerializer):
             'id', 'date_inspection', 'utilisateur', 'statut_analyse', 'statut',
             'defect_detected', 'defect_type', 'confidence', 'observation',
             'resultat_analyse', 'score_confiance', 'erreur_message',
+            'media_type', 'annotations',
             'created_at', 'updated_at',
         ]
 
@@ -317,6 +332,9 @@ class InspectionVisuelleSerializer(serializers.ModelSerializer):
 
     def get_image(self, obj):
         return self._abs_url(obj.image)
+
+    def get_image_annotee(self, obj):
+        return self._abs_url(obj.image_annotee)
 
     def get_ligne_nom(self, obj):
         if obj.machine and obj.machine.ligne_production:
@@ -339,6 +357,8 @@ class InspectionVisuelleSerializer(serializers.ModelSerializer):
 class InspectionCreateSerializer(serializers.ModelSerializer):
     """Serializer de création : machine + image (multipart)."""
 
+    image = serializers.FileField(required=True)
+
     class Meta:
         model = InspectionVisuelle
         fields = ['machine', 'image', 'observations']
@@ -349,29 +369,72 @@ class InspectionCreateSerializer(serializers.ModelSerializer):
         return machine
 
     def validate_image(self, image):
-        # Taille maximale configurable.
-        max_mb = getattr(settings, 'INSPECTION_IMAGE_MAX_MB', 5)
+        """Vérifie le format réel du média et bloque les extensions déguisées."""
+        max_mb = getattr(settings, 'INSPECTION_IMAGE_MAX_MB', 20)
         if max_mb and image.size > max_mb * 1024 * 1024:
             raise serializers.ValidationError(
-                f"L'image ne doit pas dépasser {max_mb} Mo."
+                f"Le fichier ne doit pas dépasser {max_mb} Mo."
             )
-
-        # Type MIME (le champ ImageField de DRF a déjà validé qu'il s'agit
-        # d'une image réelle via Pillow ; on restreint en plus les formats).
+        extension = os.path.splitext(getattr(image, 'name', '') or '')[1].lower()
+        if extension not in ALLOWED_MEDIA_EXTENSIONS:
+            raise serializers.ValidationError(
+                'Formats acceptés : JPG, PNG et WEBP.'
+            )
         content_type = (getattr(image, 'content_type', '') or '').lower()
-        if content_type and content_type not in ALLOWED_IMAGE_CONTENT_TYPES:
+        if content_type and content_type not in ALLOWED_MEDIA_CONTENT_TYPES[extension]:
             raise serializers.ValidationError(
-                "Format d'image non supporté. Formats acceptés : JPG, JPEG, PNG."
+                'Le type MIME ne correspond pas au format du fichier.'
             )
-
-        # Extension du fichier.
-        name = getattr(image, 'name', '') or ''
-        extension = os.path.splitext(name)[1].lower()
-        if extension and extension not in ALLOWED_IMAGE_EXTENSIONS:
-            raise serializers.ValidationError(
-                "Extension d'image non supportée. Utilisez .jpg, .jpeg ou .png."
-            )
+        image.seek(0)
+        try:
+            with Image.open(image) as decoded:
+                expected = {'.jpg': 'JPEG', '.jpeg': 'JPEG', '.png': 'PNG', '.webp': 'WEBP'}[extension]
+                if decoded.format != expected:
+                    raise serializers.ValidationError('Le contenu ne correspond pas à l’extension du fichier.')
+                decoded.verify()
+        except (UnidentifiedImageError, OSError, ValueError):
+            raise serializers.ValidationError('Le fichier image est illisible ou invalide.')
+        image.seek(0)
         return image
+
+    def create(self, validated_data):
+        validated_data['media_type'] = InspectionVisuelle.TypeMedia.IMAGE
+        return super().create(validated_data)
+
+
+class InspectionAnnotationSerializer(serializers.Serializer):
+    """Valide l'image composée et les formes sauvées par l'éditeur canvas."""
+
+    image = serializers.FileField()
+    annotations = serializers.JSONField(required=False, default=list)
+
+    def validate_image(self, image):
+        extension = os.path.splitext(getattr(image, 'name', '') or '')[1].lower()
+        if extension not in {'.jpg', '.jpeg', '.png', '.webp'}:
+            raise serializers.ValidationError('L’image annotée doit être au format JPG, PNG ou WEBP.')
+        max_mb = getattr(settings, 'INSPECTION_IMAGE_MAX_MB', 20)
+        if max_mb and image.size > max_mb * 1024 * 1024:
+            raise serializers.ValidationError(f"L'image annotée ne doit pas dépasser {max_mb} Mo.")
+        try:
+            with Image.open(image) as decoded:
+                decoded.verify()
+        except (UnidentifiedImageError, OSError, ValueError):
+            raise serializers.ValidationError('Le fichier d’image annotée est illisible.')
+        image.seek(0)
+        return image
+
+    def validate_annotations(self, value):
+        if not isinstance(value, list) or len(value) > 100:
+            raise serializers.ValidationError('Les annotations doivent être une liste de 100 éléments maximum.')
+        supported = {'rectangle', 'circle', 'arrow', 'comment'}
+        for annotation in value:
+            if not isinstance(annotation, dict) or annotation.get('type') not in supported:
+                raise serializers.ValidationError('Une annotation contient un type non reconnu.')
+            if not all(isinstance(annotation.get(key), (int, float)) for key in ('x', 'y')):
+                raise serializers.ValidationError('Chaque annotation doit avoir une position valide.')
+            if annotation['type'] == 'comment' and len(str(annotation.get('text', ''))) > 500:
+                raise serializers.ValidationError('Un commentaire d’annotation est limité à 500 caractères.')
+        return value
 
 
 # ── Périmètres d'accès (UserScope) ─────────────────────────────────────────────
@@ -557,3 +620,84 @@ class MonPerimetreSerializer(serializers.Serializer):
                 user.scopes.select_related('usine', 'zone', 'ligne', 'machine'), many=True
             ).data,
         }
+
+
+class OrdreTravailSerializer(serializers.ModelSerializer):
+    machine_id = serializers.PrimaryKeyRelatedField(source='machine', queryset=Machine.objects.all())
+    machine_nom = serializers.CharField(source='machine.nom', read_only=True)
+    type = serializers.ChoiceField(source='type_ordre', choices=OrdreTravail.Type.choices, required=False)
+    historique = serializers.JSONField(read_only=True)
+    rapport = serializers.JSONField(read_only=True, allow_null=True)
+
+    class Meta:
+        model = OrdreTravail
+        fields = [
+            'id', 'machine_id', 'machine_nom', 'type', 'priorite', 'titre',
+            'assigne', 'statut', 'echeance', 'from_alert', 'historique',
+            'rapport', 'created_at', 'updated_at',
+        ]
+        read_only_fields = ['id', 'historique', 'rapport', 'created_at', 'updated_at']
+
+    def validate(self, attrs):
+        next_status = attrs.get('statut')
+        instance = self.instance
+        request = self.context.get('request')
+        if instance and next_status and next_status != instance.statut:
+            order = list(OrdreTravail.Statut.values)
+            if next_status not in order or order.index(next_status) != order.index(instance.statut) + 1:
+                raise serializers.ValidationError({'statut': 'Le statut doit suivre l’étape suivante du workflow.'})
+            if next_status in (OrdreTravail.Statut.VALIDE, OrdreTravail.Statut.CLOTURE) and getattr(request.user, 'role', None) != 'ADMIN':
+                raise serializers.ValidationError({'statut': 'La validation et la clôture sont réservées à l’administrateur.'})
+        return attrs
+
+    def create(self, validated_data):
+        from django.utils import timezone
+        from datetime import timedelta
+
+        assigne = validated_data.get('assigne', '').strip()
+        validated_data['statut'] = OrdreTravail.Statut.ASSIGNE if assigne and assigne != '—' else OrdreTravail.Statut.CREE
+        validated_data.setdefault('echeance', timezone.now() + timedelta(days=2 if validated_data.get('priorite') == OrdreTravail.Priorite.HAUTE else 7))
+        obj = OrdreTravail.objects.create(**validated_data)
+        obj.historique = [{'statut': obj.statut, 'date': obj.created_at.isoformat()}]
+        obj.save(update_fields=['historique', 'updated_at'])
+        return obj
+
+    def update(self, instance, validated_data):
+        next_status = validated_data.pop('statut', None)
+        for attr, value in validated_data.items():
+            setattr(instance, attr, value)
+        if next_status and next_status != instance.statut:
+            instance.statut = next_status
+            instance.historique = [*instance.historique, {'statut': next_status, 'date': timezone.now().isoformat()}]
+        instance.save()
+        return instance
+
+
+class MaintenanceRecurrenteSerializer(serializers.ModelSerializer):
+    machine_id = serializers.PrimaryKeyRelatedField(source='machine', queryset=Machine.objects.all())
+    machine_nom = serializers.CharField(source='machine.nom', read_only=True)
+
+    class Meta:
+        model = MaintenanceRecurrente
+        fields = ['id', 'machine_id', 'machine_nom', 'titre', 'frequence_jours', 'date_debut', 'created_at']
+        read_only_fields = ['id', 'machine_nom', 'created_at']
+
+    def validate_frequence_jours(self, value):
+        if value < 1:
+            raise serializers.ValidationError('La fréquence doit être d’au moins un jour.')
+        return value
+
+
+class PieceInterventionSerializer(serializers.Serializer):
+    ref = serializers.CharField(max_length=100)
+    qte = serializers.IntegerField(min_value=1)
+    cout = serializers.FloatField(min_value=0)
+
+
+class RapportInterventionSerializer(serializers.Serializer):
+    travaux = serializers.CharField()
+    pieces = PieceInterventionSerializer(many=True, required=False)
+    duree = serializers.FloatField(min_value=0)
+    observations = serializers.CharField(required=False, allow_blank=True)
+    signataire = serializers.CharField(max_length=200)
+    signature_data_url = serializers.CharField(max_length=1_500_000, required=False, allow_blank=True)
