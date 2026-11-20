@@ -11,9 +11,9 @@ chemins d'ingestion existants : `POST /api/readings/`, `import_csv`,
    : on n'alerte pas sur une valeur inventée par le Module 3.
 2. La surveillance est ignorée si `Sensor.actif` est `False` : c'est
    l'activation/désactivation de la surveillance demandée par l'UC-26.
-3. Si `valeur < Sensor.seuil_min` → type `SEUIL_MIN` ; si
-   `valeur > Sensor.seuil_max` → type `SEUIL_MAX`. Sinon, retour à la
-   normale : les alertes ouvertes du capteur sont résolues.
+3. Si un seuil existe et que la valeur le franchit, une alerte est créée.
+   Les seuils absents sont ignorés. Si aucun seuil n'est franchi, les alertes
+   ouvertes du capteur sont résolues.
 
 Le **statut de la machine n'est jamais modifié** ici : la machine garde sa
 propre logique de statut.
@@ -23,8 +23,9 @@ propre logique de statut.
 Deux métriques sont calculées à partir des seuils *existants* du capteur :
 
 * `depassement      = |valeur − seuil franchi|`
-* `ratio_plage_pct  = depassement / (seuil_max − seuil_min) × 100`
-  (toujours défini : `Sensor.clean()` garantit `seuil_min < seuil_max`)
+* `ratio_plage_pct  = depassement / (seuil_max − seuil_min) × 100` si les
+  deux seuils existent ; sinon le ratio vaut 0 et seuls les seuils absolus
+  de dépassement déterminent le niveau.
 
 Puis, dans cet ordre :
 
@@ -86,22 +87,23 @@ def evaluer_seuil(valeur, seuil_min, seuil_max) -> dict | None:
     Le retour contient ``type_alerte``, ``seuil``, ``depassement`` et
     ``ratio_plange_pct`` — tout ce dont le niveau a besoin.
     """
-    if valeur < seuil_min:
+    if seuil_min is not None and valeur < seuil_min:
         seuil = seuil_min
         type_alerte = Alerte.TypeAlerte.SEUIL_MIN
-    elif valeur > seuil_max:
+    elif seuil_max is not None and valeur > seuil_max:
         seuil = seuil_max
         type_alerte = Alerte.TypeAlerte.SEUIL_MAX
     else:
         return None
 
     depassement = abs(valeur - seuil)
-    plage = (seuil_max - seuil_min) or 1.0
+    plage = (seuil_max - seuil_min) if seuil_min is not None and seuil_max is not None else None
+    ratio_plage_pct = round(float(depassement) / float(plage) * 100.0, 2) if plage else 0.0
     return {
         'type_alerte': type_alerte,
         'seuil': float(seuil),
         'depassement': float(depassement),
-        'ratio_plage_pct': round(float(depassement) / float(plage) * 100.0, 2),
+        'ratio_plage_pct': ratio_plage_pct,
     }
 
 
@@ -256,7 +258,8 @@ def _resoudre_si_normal(capteur, reading) -> dict:
     for alerte in ouvertes:
         motif = (
             f'Reprise dans la plage autorisée du capteur '
-            f'({capteur.seuil_min} – {capteur.seuil_max} {capteur.unite}).'
+            f'({capteur.seuil_min if capteur.seuil_min is not None else "−∞"} – '
+            f'{capteur.seuil_max if capteur.seuil_max is not None else "+∞"} {capteur.unite}).'
         ).strip()
         if alerte.resoudre(motif):
             resolues.append(alerte)

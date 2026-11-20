@@ -355,10 +355,11 @@ class TestAdminCreateUser:
         assert response.data['email'] == 'ali@example.com'
         assert response.data['role'] == 'TECHNICIEN'
         assert 'password' not in response.data
-        # Mot de passe haché en base + flag must_reset_password actif
+        # Le mot de passe généré permet une connexion dès la première utilisation.
         created = User.objects.get(email='ali@example.com')
         assert created.password.startswith('bcrypt_sha256$')
-        assert created.must_reset_password is True
+        assert created.actif is True
+        assert created.must_reset_password is False
         # Email envoyé avec les credentials + lien de login
         assert len(mail.outbox) == 1
         assert 'SmartFactory Twin' in mail.outbox[0].subject
@@ -380,7 +381,7 @@ class TestAdminCreateUser:
         }, format='json')
         assert response.status_code == 401
 
-    def test_first_login_forced_reset(self, api_client, admin_user):
+    def test_first_login_uses_generated_password_without_forced_reset(self, api_client, admin_user):
         # L'admin crée un user → on récupère le mot de passe depuis l'email
         api_client.force_authenticate(user=admin_user)
         create_url = reverse('admin-create-user')
@@ -400,14 +401,13 @@ class TestAdminCreateUser:
             'password': temp_password,
         }, format='json')
         assert response.status_code == 200
-        assert response.data['must_reset_password'] is True
-        assert 'uid' in response.data
-        assert 'token' in response.data
-        # Pas de JWT délivré tant que le mot de passe n'est pas changé
-        assert 'access' not in response.data
-        assert 'refresh' not in response.data
+        assert 'access' in response.data
+        assert 'refresh' in response.data
+        created = User.objects.get(email='ali@example.com')
+        assert created.actif is True
+        assert created.must_reset_password is False
 
-    def test_reset_confirm_clears_flag_and_enables_normal_login(self, api_client, admin_user):
+    def test_user_can_voluntarily_reset_password_after_first_login(self, api_client, admin_user):
         from django.contrib.auth.tokens import default_token_generator
         from django.utils.http import urlsafe_base64_encode
         from django.utils.encoding import force_bytes
@@ -420,17 +420,13 @@ class TestAdminCreateUser:
             'email': 'ali@example.com', 'role': 'TECHNICIEN',
         }, format='json')
         api_client.force_authenticate(user=None)
+        temp_password = mail.outbox[0].body.split(
+            'Mot de passe temporaire : '
+        )[1].split('\n')[0]
 
-        body = mail.outbox[0].body
-        temp_password = body.split('Mot de passe temporaire : ')[1].split('\n')[0]
-
-        # Premier login → uid + token de reset
-        login_url = reverse('auth-login')
-        login_resp = api_client.post(login_url, {
-            'email': 'ali@example.com', 'password': temp_password,
-        }, format='json')
-        uid = login_resp.data['uid']
-        token = login_resp.data['token']
+        user = User.objects.get(email='ali@example.com')
+        uid = urlsafe_base64_encode(force_bytes(user.pk))
+        token = default_token_generator.make_token(user)
 
         # Reset du mot de passe
         confirm_url = reverse('password-reset-confirm')
@@ -444,10 +440,10 @@ class TestAdminCreateUser:
 
         # Le flag est remis à False
         user = User.objects.get(email='ali@example.com')
-        assert user.must_reset_password is False
         assert user.check_password(new_password) is True
 
         # Login normal avec le nouveau mot de passe → JWT délivré
+        login_url = reverse('auth-login')
         login_resp2 = api_client.post(login_url, {
             'email': 'ali@example.com', 'password': new_password,
         }, format='json')
@@ -535,7 +531,7 @@ class TestUpdateProfile:
         assert response.data['prenom'] == 'Karim'
         regular_user.refresh_from_db()
         assert regular_user.nom == 'Benali'
-        assert regular_user.telephone == '+216 55 123 456cd'
+        assert regular_user.telephone == '+216 55 123 456'
 
     def test_partial_update_only_telephone(self, api_client, regular_user):
         api_client.force_authenticate(user=regular_user)
@@ -666,8 +662,8 @@ class TestChangePassword:
 # ─── Tests Nouveaux : Logo Email, 48h Expiration, Rôles Restreints ───────────
 
 @pytest.mark.django_db
-class TestUserCreationAnd48hExpiration:
-    def test_admin_create_user_sets_inactive_by_default(self, api_client, admin_user):
+class TestUserCreationAndLogin:
+    def test_admin_create_user_is_active_without_forced_reset(self, api_client, admin_user):
         api_client.force_authenticate(user=admin_user)
         create_url = reverse('admin-create-user')
         response = api_client.post(create_url, {
@@ -677,9 +673,8 @@ class TestUserCreationAnd48hExpiration:
         assert response.status_code == 201
 
         created_user = User.objects.get(email='tech.new@example.com')
-        # Inactif par défaut jusqu'au premier login
-        assert created_user.actif is False
-        assert created_user.must_reset_password is True
+        assert created_user.actif is True
+        assert created_user.must_reset_password is False
 
     def test_admin_cannot_create_admin_user(self, api_client, admin_user):
         api_client.force_authenticate(user=admin_user)
@@ -691,7 +686,7 @@ class TestUserCreationAnd48hExpiration:
         assert response.status_code == 400
         assert 'error' in response.data
 
-    def test_email_contains_logo_and_48h_warning(self, api_client, admin_user):
+    def test_email_contains_logo_and_optional_password_change_info(self, api_client, admin_user):
         api_client.force_authenticate(user=admin_user)
         create_url = reverse('admin-create-user')
         api_client.post(create_url, {
@@ -701,7 +696,7 @@ class TestUserCreationAnd48hExpiration:
 
         assert len(mail.outbox) >= 1
         last_email = mail.outbox[-1]
-        assert '48 heures' in last_email.body or '48 heures' in last_email.alternatives[0][0]
+        assert 'modifier votre mot de passe' in last_email.body
         # Le logo est référencé via CID et joint en pièce inline (fiable Gmail/Outlook),
         # et non plus en data-URI (bloqué par la plupart des clients mail).
         html_content = last_email.alternatives[0][0]
@@ -711,7 +706,7 @@ class TestUserCreationAnd48hExpiration:
         content_ids = [att.get('Content-ID') for att in last_email.attachments]
         assert '<smartfactory-logo>' in content_ids
 
-    def test_login_within_48h_allows_first_login_reset(self, api_client, admin_user):
+    def test_generated_password_allows_first_login(self, api_client, admin_user):
         api_client.force_authenticate(user=admin_user)
         create_url = reverse('admin-create-user')
         api_client.post(create_url, {
@@ -729,11 +724,14 @@ class TestUserCreationAnd48hExpiration:
             'password': temp_password,
         }, format='json')
         assert response.status_code == 200
-        assert response.data['must_reset_password'] is True
-        assert 'uid' in response.data
-        assert 'token' in response.data
+        assert 'access' in response.data
+        assert 'refresh' in response.data
 
-    def test_password_reset_activates_user_account(self, api_client, admin_user):
+    def test_optional_password_reset_keeps_user_active(self, api_client, admin_user):
+        from django.contrib.auth.tokens import default_token_generator
+        from django.utils.http import urlsafe_base64_encode
+        from django.utils.encoding import force_bytes
+
         api_client.force_authenticate(user=admin_user)
         create_url = reverse('admin-create-user')
         api_client.post(create_url, {
@@ -742,16 +740,9 @@ class TestUserCreationAnd48hExpiration:
         }, format='json')
         api_client.force_authenticate(user=None)
 
-        body = mail.outbox[-1].body
-        temp_password = body.split('Mot de passe temporaire : ')[1].split('\n')[0]
-
-        login_url = reverse('auth-login')
-        login_resp = api_client.post(login_url, {
-            'email': 'karim@example.com',
-            'password': temp_password,
-        }, format='json')
-        uid = login_resp.data['uid']
-        token = login_resp.data['token']
+        user = User.objects.get(email='karim@example.com')
+        uid = urlsafe_base64_encode(force_bytes(user.pk))
+        token = default_token_generator.make_token(user)
 
         confirm_url = reverse('password-reset-confirm')
         confirm_resp = api_client.post(confirm_url, {
@@ -767,6 +758,7 @@ class TestUserCreationAnd48hExpiration:
         assert user.must_reset_password is False
 
         # Le login suivant avec le nouveau mot de passe fonctionne et renvoie le JWT
+        login_url = reverse('auth-login')
         normal_login = api_client.post(login_url, {
             'email': 'karim@example.com',
             'password': 'MonNouveauPass123!',
@@ -774,7 +766,7 @@ class TestUserCreationAnd48hExpiration:
         assert normal_login.status_code == 200
         assert 'access' in normal_login.data
 
-    def test_login_after_48h_is_rejected_as_inactive(self, api_client, admin_user):
+    def test_generated_password_does_not_expire_after_48_hours(self, api_client, admin_user):
         from django.utils import timezone
         from datetime import timedelta
 
@@ -799,6 +791,6 @@ class TestUserCreationAnd48hExpiration:
             'email': 'late@example.com',
             'password': temp_password,
         }, format='json')
-        assert response.status_code == 403
-        assert '48 heures' in response.data['error']
+        assert response.status_code == 200
+        assert 'access' in response.data
 

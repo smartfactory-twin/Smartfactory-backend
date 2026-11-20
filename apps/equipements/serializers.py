@@ -3,6 +3,7 @@ import os
 from PIL import Image, UnidentifiedImageError
 
 from django.conf import settings
+from django.core.exceptions import ValidationError as DjangoValidationError
 
 from rest_framework import serializers
 from django.utils import timezone
@@ -182,22 +183,37 @@ class UsineHierarchieSerializer(serializers.ModelSerializer):
 class SensorSerializer(serializers.ModelSerializer):
     machine_nom = serializers.CharField(source='machine.nom', read_only=True)
     machine_identifiant = serializers.CharField(source='machine.identifiant_interne', read_only=True)
+    unite = serializers.CharField(required=False, allow_blank=True)
+    frequence_mesure = serializers.IntegerField(required=False, allow_null=True)
+    unit = serializers.CharField(source='unite', required=False, allow_blank=True)
+    sampling_period_seconds = serializers.IntegerField(source='frequence_mesure', required=False, allow_null=True)
 
     class Meta:
         model = Sensor
         fields = [
             'id', 'identifiant', 'nom', 'type_capteur', 'machine',
             'machine_nom', 'machine_identifiant', 'unite', 'frequence_mesure',
-            'seuil_min', 'seuil_max', 'actif', 'description', 'created_at', 'updated_at'
+            'unit', 'sampling_period_seconds', 'seuil_min', 'seuil_max', 'actif', 'description',
+            'sensor_role', 'nominal_min', 'nominal_max', 'criticality', 'is_ai_eligible',
+            'created_at', 'updated_at'
         ]
         read_only_fields = ['id', 'created_at', 'updated_at']
 
     def validate(self, attrs):
+        # `unit` et `unite` (idem période) sont des alias d'API rétrocompatibles.
+        for alias, canonical in (('unit', 'unite'), ('sampling_period_seconds', 'frequence_mesure')):
+            if alias in attrs and canonical in attrs:
+                raise serializers.ValidationError({alias: f"Ne fournissez pas {alias} et {canonical} simultanément."})
         # Fusionne avec l'instance existante pour valider aussi les PATCH partiels.
         instance = self.instance
         seuil_min = attrs.get('seuil_min', getattr(instance, 'seuil_min', None))
         seuil_max = attrs.get('seuil_max', getattr(instance, 'seuil_max', None))
         frequence = attrs.get('frequence_mesure', getattr(instance, 'frequence_mesure', None))
+        sensor_role = attrs.get('sensor_role', getattr(instance, 'sensor_role', Sensor.SensorRole.OTHER))
+        unit = attrs.get('unite', getattr(instance, 'unite', ''))
+        nominal_min = attrs.get('nominal_min', getattr(instance, 'nominal_min', None))
+        nominal_max = attrs.get('nominal_max', getattr(instance, 'nominal_max', None))
+        eligible = attrs.get('is_ai_eligible', getattr(instance, 'is_ai_eligible', False))
 
         if seuil_min is not None and seuil_max is not None and seuil_min >= seuil_max:
             raise serializers.ValidationError({
@@ -208,6 +224,17 @@ class SensorSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError({
                 'frequence_mesure': 'La fréquence de mesure doit être supérieure à 0.'
             })
+        candidate = instance or Sensor()
+        for field, value in {
+            'sensor_role': sensor_role, 'unite': unit, 'nominal_min': nominal_min,
+            'nominal_max': nominal_max, 'seuil_min': seuil_min, 'seuil_max': seuil_max,
+            'is_ai_eligible': eligible,
+        }.items():
+            setattr(candidate, field, value)
+        try:
+            candidate.clean()
+        except DjangoValidationError as exc:
+            raise serializers.ValidationError(exc.message_dict if hasattr(exc, 'message_dict') else exc.messages)
         return attrs
 
 

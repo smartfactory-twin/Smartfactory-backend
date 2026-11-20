@@ -76,6 +76,10 @@ SENSOR_HEADER_ALIASES = {
     'statut': 'active',
 
     'description': 'description',
+    'sensor_role': 'sensor_role', 'role_capteur': 'sensor_role',
+    'nominal_min': 'nominal_min', 'nominal_max': 'nominal_max',
+    'criticality': 'criticality', 'criticite': 'criticality',
+    'is_ai_eligible': 'is_ai_eligible', 'eligible_ia': 'is_ai_eligible',
 }
 
 VALID_SENSOR_TYPES = [choice[0] for choice in Sensor.SensorType.choices]
@@ -164,6 +168,10 @@ def _parse_float(raw, field, row_errors):
         return None
 
 
+def _parse_optional_float(raw, field, row_errors):
+    return None if raw in (None, '') else _parse_float(raw, field, row_errors)
+
+
 def _parse_bool(raw, row_errors):
     if raw in (None, ''):
         return True
@@ -200,7 +208,6 @@ def _resolve_frequency_seconds(normalized, row_errors):
             return None
         return int(round(minutes * 60))
 
-    row_errors.append('frequency_seconds requis')
     return None
 
 
@@ -277,12 +284,8 @@ def import_sensors_from_csv(file_obj, dry_run=False):
         frequency = _resolve_frequency_seconds(normalized, row_errors)
 
         # ── Seuils ────────────────────────────────────────────────────────
-        threshold_min = _parse_float(
-            normalized.get('threshold_min'), 'threshold_min', row_errors
-        )
-        threshold_max = _parse_float(
-            normalized.get('threshold_max'), 'threshold_max', row_errors
-        )
+        threshold_min = _parse_optional_float(normalized.get('threshold_min'), 'threshold_min', row_errors)
+        threshold_max = _parse_optional_float(normalized.get('threshold_max'), 'threshold_max', row_errors)
         if (
             threshold_min is not None
             and threshold_max is not None
@@ -294,6 +297,32 @@ def import_sensors_from_csv(file_obj, dry_run=False):
 
         # ── Statut actif ──────────────────────────────────────────────────
         active = _parse_bool(normalized.get('active'), row_errors)
+
+        sensor_role = normalized.get('sensor_role', 'other').strip().lower() or 'other'
+        nominal_min = _parse_optional_float(normalized.get('nominal_min'), 'nominal_min', row_errors)
+        nominal_max = _parse_optional_float(normalized.get('nominal_max'), 'nominal_max', row_errors)
+        criticality = normalized.get('criticality', 'low').strip().lower() or 'low'
+        ai_eligible = _parse_bool(normalized.get('is_ai_eligible', 'false') or 'false', row_errors)
+        if sensor_role not in {value for value, _ in Sensor.SensorRole.choices}:
+            row_errors.append(f'sensor_role invalide : {sensor_role}')
+        if criticality not in {value for value, _ in Sensor.Criticality.choices}:
+            row_errors.append(f'criticality invalide : {criticality}')
+
+        candidate = Sensor(
+            identifiant=sensor_id, nom=normalized.get('name', '').strip() or sensor_id,
+            type_capteur=sensor_type or Sensor.SensorType.TEMPERATURE, machine=machine,
+            unite=unit, frequence_mesure=frequency, seuil_min=threshold_min,
+            seuil_max=threshold_max, sensor_role=sensor_role, nominal_min=nominal_min,
+            nominal_max=nominal_max, criticality=criticality, is_ai_eligible=ai_eligible,
+        )
+        try:
+            candidate.clean()
+        except Exception as exc:
+            validation_errors = getattr(exc, 'message_dict', None)
+            if validation_errors:
+                row_errors.extend(f'{field}: {message}' for field, messages in validation_errors.items() for message in (messages if isinstance(messages, list) else [messages]))
+            elif getattr(exc, 'messages', None):
+                row_errors.extend(exc.messages)
 
         if row_errors:
             errors.append({'row': index, 'message': ' ; '.join(row_errors)})
@@ -316,6 +345,8 @@ def import_sensors_from_csv(file_obj, dry_run=False):
             'threshold_max': threshold_max,
             'active': active,
             'description': description,
+            'sensor_role': sensor_role, 'nominal_min': nominal_min, 'nominal_max': nominal_max,
+            'criticality': criticality, 'is_ai_eligible': ai_eligible,
         })
 
         if len(preview_items) < PREVIEW_LIMIT:
@@ -329,6 +360,8 @@ def import_sensors_from_csv(file_obj, dry_run=False):
                 'threshold_min': threshold_min,
                 'threshold_max': threshold_max,
                 'active': active,
+                'sensor_role': sensor_role, 'nominal_min': nominal_min, 'nominal_max': nominal_max,
+                'criticality': criticality, 'is_ai_eligible': ai_eligible,
             })
 
         imported += 1
@@ -347,6 +380,9 @@ def import_sensors_from_csv(file_obj, dry_run=False):
                     seuil_max=item['threshold_max'],
                     actif=item['active'],
                     description=item['description'],
+                    sensor_role=item['sensor_role'], nominal_min=item['nominal_min'],
+                    nominal_max=item['nominal_max'], criticality=item['criticality'],
+                    is_ai_eligible=item['is_ai_eligible'],
                 )
 
     return {

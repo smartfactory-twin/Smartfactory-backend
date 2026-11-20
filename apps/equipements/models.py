@@ -154,6 +154,20 @@ class Composant(models.Model):
 
 
 class Sensor(models.Model):
+    class SensorRole(models.TextChoices):
+        TEMPERATURE = 'temperature', 'Température'
+        VIBRATION = 'vibration', 'Vibration'
+        PRESSURE = 'pressure', 'Pression'
+        FLOW = 'flow', 'Débit'
+        CURRENT = 'current', 'Courant'
+        SPEED = 'speed', 'Vitesse'
+        OTHER = 'other', 'Autre'
+
+    class Criticality(models.TextChoices):
+        LOW = 'low', 'Faible'
+        MEDIUM = 'medium', 'Moyenne'
+        HIGH = 'high', 'Élevée'
+
     class SensorType(models.TextChoices):
         TEMPERATURE = 'TEMPERATURE', 'Température'
         VIBRATION = 'VIBRATION', 'Vibration'
@@ -179,10 +193,15 @@ class Sensor(models.Model):
     unite = models.CharField(max_length=50, verbose_name="Unité de mesure")
     frequence_mesure = models.IntegerField(
         verbose_name="Fréquence de mesure (secondes)",
-        help_text="Fréquence en secondes"
+        help_text="Fréquence en secondes", null=True, blank=True
     )
-    seuil_min = models.FloatField(verbose_name="Seuil minimum")
-    seuil_max = models.FloatField(verbose_name="Seuil maximum")
+    seuil_min = models.FloatField(verbose_name="Seuil minimum", null=True, blank=True)
+    seuil_max = models.FloatField(verbose_name="Seuil maximum", null=True, blank=True)
+    sensor_role = models.CharField(max_length=20, choices=SensorRole.choices, default=SensorRole.OTHER)
+    nominal_min = models.FloatField(null=True, blank=True)
+    nominal_max = models.FloatField(null=True, blank=True)
+    criticality = models.CharField(max_length=10, choices=Criticality.choices, default=Criticality.LOW)
+    is_ai_eligible = models.BooleanField(default=False)
     actif = models.BooleanField(default=True, verbose_name="Actif")
     description = models.TextField(blank=True, default='', verbose_name="Description")
     created_at = models.DateTimeField(auto_now_add=True)
@@ -198,10 +217,38 @@ class Sensor(models.Model):
 
     def clean(self):
         from django.core.exceptions import ValidationError
-        if self.seuil_min >= self.seuil_max:
-            raise ValidationError("Le seuil minimum doit être inférieur au seuil maximum.")
-        if self.frequence_mesure <= 0:
-            raise ValidationError("La fréquence de mesure doit être supérieure à 0.")
+        errors = {}
+        if self.seuil_min is not None and self.seuil_max is not None and self.seuil_min >= self.seuil_max:
+            errors['seuil_min'] = "Le seuil minimum doit être inférieur au seuil maximum."
+        if self.frequence_mesure is not None and self.frequence_mesure <= 0:
+            errors['frequence_mesure'] = "La fréquence de mesure doit être supérieure à 0."
+        if (self.nominal_min is None) != (self.nominal_max is None):
+            errors['nominal_min'] = "Les deux bornes nominales doivent être renseignées ensemble."
+        elif self.nominal_min is not None and self.nominal_max is not None:
+            if self.nominal_min >= self.nominal_max:
+                errors['nominal_min'] = "La borne nominale minimum doit être inférieure à la borne maximum."
+            if self.seuil_min is not None and self.nominal_min < self.seuil_min:
+                errors['nominal_min'] = "La plage nominale doit rester au-dessus du seuil d'alerte minimum."
+            if self.seuil_max is not None and self.nominal_max > self.seuil_max:
+                errors['nominal_max'] = "La plage nominale doit rester sous le seuil d'alerte maximum."
+        if self.sensor_role != self.SensorRole.OTHER:
+            unit = (self.unite or '').strip().lower().replace('°', '')
+            compatible = {
+                self.SensorRole.TEMPERATURE: {'c', 'k', 'f', 'celsius', 'kelvin', 'fahrenheit'},
+                self.SensorRole.VIBRATION: {'mm/s', 'm/s', 'mm/s²', 'm/s²', 'g'},
+                self.SensorRole.PRESSURE: {'pa', 'kpa', 'mpa', 'bar', 'psi'},
+                self.SensorRole.FLOW: {'l/min', 'l/s', 'm³/h', 'm3/h', 'm³/s', 'm3/s'},
+                self.SensorRole.CURRENT: {'a', 'ma'},
+                self.SensorRole.SPEED: {'rpm', 'tr/min', 'm/s'},
+            }
+            if unit not in compatible.get(self.sensor_role, set()):
+                errors['unite'] = f"Unité '{self.unite}' incompatible ou non reconnue pour le rôle '{self.sensor_role}'."
+        if self.is_ai_eligible and self.sensor_role == self.SensorRole.OTHER:
+            errors['is_ai_eligible'] = "Un capteur de rôle 'other' ne peut pas être éligible à l'IA."
+        if self.is_ai_eligible and (self.nominal_min is None or self.nominal_max is None):
+            errors['is_ai_eligible'] = "Pour être éligible à l'IA, renseignez nominal_min et nominal_max."
+        if errors:
+            raise ValidationError(errors)
 
     def save(self, *args, **kwargs):
         self.clean()

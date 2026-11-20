@@ -29,6 +29,7 @@ def _machine_health(machine, since):
     sensors = machine.capteurs.filter(actif=True).order_by('nom')
     sensor_rows = []
     total = 0
+    thresholded_total = 0
     in_range = 0
     for sensor in sensors:
         readings = Reading.objects.filter(
@@ -38,7 +39,15 @@ def _machine_health(machine, since):
         if not stats['count']:
             continue
         total += stats['count']
-        in_range += readings.filter(valeur__gte=sensor.seuil_min, valeur__lte=sensor.seuil_max).count()
+        in_range_readings = readings
+        has_threshold = sensor.seuil_min is not None or sensor.seuil_max is not None
+        if sensor.seuil_min is not None:
+            in_range_readings = in_range_readings.filter(valeur__gte=sensor.seuil_min)
+        if sensor.seuil_max is not None:
+            in_range_readings = in_range_readings.filter(valeur__lte=sensor.seuil_max)
+        if has_threshold:
+            thresholded_total += stats['count']
+            in_range += in_range_readings.count()
         sensor_rows.append({
             'nom': sensor.nom,
             'unite': sensor.unite,
@@ -52,7 +61,7 @@ def _machine_health(machine, since):
     alert_count = Alerte.objects.filter(machine=machine, date_declenchement__gte=since).count()
     ot_count = OrdreTravail.objects.filter(machine=machine, created_at__gte=since).count()
     return {
-        'sante': round(100 * in_range / total) if total else None,
+        'sante': round(100 * in_range / thresholded_total) if thresholded_total else None,
         'rul': None,
         'statut': machine.statut,
         'alertes_count': alert_count,

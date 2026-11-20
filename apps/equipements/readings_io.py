@@ -88,11 +88,19 @@ def _extract_keys(item):
 def apply_preprocessing(reading: Reading) -> Reading:
     """RULE 1 : marque une lecture hors plage sans la supprimer."""
     sensor = reading.sensor
-    out_of_range = reading.valeur < sensor.seuil_min or reading.valeur > sensor.seuil_max
+    out_of_range = _is_out_of_range(reading.valeur, sensor)
     reading.hors_plage = out_of_range
     reading.est_valide = not out_of_range
     reading.save(update_fields=['hors_plage', 'est_valide'])
     return reading
+
+
+def _is_out_of_range(value, sensor):
+    """Ignore les seuils absents; sans seuil défini, aucune plage n'est enfreinte."""
+    return (
+        (sensor.seuil_min is not None and value < sensor.seuil_min)
+        or (sensor.seuil_max is not None and value > sensor.seuil_max)
+    )
 
 
 # ── Analyse / import ──────────────────────────────────────────────────────────
@@ -150,7 +158,7 @@ def _process_items(items, dry_run=False):
             continue
         already_seen.add(dedup_key)
 
-        is_out_of_range = value < sensor.seuil_min or value > sensor.seuil_max
+        is_out_of_range = _is_out_of_range(value, sensor)
 
         if dry_run:
             if Reading.objects.filter(sensor=sensor, timestamp=timestamp, valeur=value).exists():
@@ -261,10 +269,7 @@ def interpolate_sensor_readings(sensor: Sensor) -> int:
                 valeur=interpolated_value,
                 interpolation=True,
                 est_valide=True,
-                hors_plage=(
-                    interpolated_value < sensor.seuil_min
-                    or interpolated_value > sensor.seuil_max
-                ),
+                hors_plage=_is_out_of_range(interpolated_value, sensor),
             )
             created += 1
     return created

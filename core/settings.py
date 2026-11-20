@@ -42,6 +42,7 @@ MIDDLEWARE = [
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
+    'apps.accounts.middleware.ApiAuditMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 ]
@@ -87,6 +88,12 @@ DATABASES = {
 
 # ─── Modèle utilisateur personnalisé ─────────────────────────────────────────
 AUTH_USER_MODEL = 'accounts.Utilisateur'
+
+# Seuils de disponibilité des données avant un entraînement IA (modifiable par environnement).
+# Valeurs par défaut : au moins 7 jours, 1 000 mesures valides et au plus 5 % manquant.
+AI_READINESS_MIN_HISTORY_DAYS = config('AI_READINESS_MIN_HISTORY_DAYS', default=7, cast=int)
+AI_READINESS_MIN_VALID_MEASURES = config('AI_READINESS_MIN_VALID_MEASURES', default=1000, cast=int)
+AI_READINESS_MAX_MISSING_RATE = config('AI_READINESS_MAX_MISSING_RATE', default=5.0, cast=float)
 
 # ─── Hachage bcrypt ──────────────────────────────────────────────────────────
 PASSWORD_HASHERS = [

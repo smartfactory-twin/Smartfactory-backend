@@ -10,6 +10,7 @@ from apps.equipements.views import (
 from apps.equipements.predictive_views import PredictiveMaintenanceAPIView
 from apps.equipements.reporting_views import MachineHealthReportAPIView, ReportPdfAPIView
 from apps.equipements.ai_prediction_views import AnomalyAnalysisAPIView, WhatIfAPIView, AiModelsAPIView
+from apps.equipements.ai_readiness_views import AiReadinessAPIView
 
 urlpatterns = [
     path('admin/', admin.site.urls),
@@ -22,6 +23,7 @@ urlpatterns = [
     path('api/ai-predictions/anomalies/', AnomalyAnalysisAPIView.as_view(), name='ai-anomalies'),
     path('api/ai-predictions/what-if/', WhatIfAPIView.as_view(), name='ai-what-if'),
     path('api/ai-predictions/models/', AiModelsAPIView.as_view(), name='ai-models'),
+    path('api/ai/readiness/', AiReadinessAPIView.as_view(), name='ai-readiness'),
 
     # ── Module 3 — UC-08 : import CSV de création de capteurs (alias) ──────────
     # CSV → création de Sensor (jamais de mesures). Distinct de UC-09 ci-dessous.

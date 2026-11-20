@@ -13,6 +13,8 @@ from .views import (
     AdminUserUpdateView,
     UpdateProfileView,
     ChangePasswordView,
+    VocalCommandHistoryView,
+    AuditLogListView,
 )
 
 urlpatterns = [
@@ -23,6 +25,8 @@ urlpatterns = [
     path('me/',                     MeView.as_view(),                 name='auth-me'),
     path('me/update/',              UpdateProfileView.as_view(),      name='auth-update-profile'),
     path('me/change-password/',     ChangePasswordView.as_view(),     name='auth-change-password'),
+    path('vocal/commands/',         VocalCommandHistoryView.as_view(), name='vocal-command-history'),
+    path('audit-logs/',             AuditLogListView.as_view(),         name='audit-log-list'),
     path('password-reset/',         PasswordResetView.as_view(),      name='password-reset'),
     path('password-reset/confirm/', PasswordResetConfirmView.as_view(),name='password-reset-confirm'),
     path('users/',                  AdminUserCreateView.as_view(),    name='admin-create-user'),

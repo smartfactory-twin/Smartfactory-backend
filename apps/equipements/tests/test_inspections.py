@@ -419,12 +419,15 @@ class TestInspectionTechnicianPermissions:
         ).status_code == 200
         assert api_client.get('/api/inspections/').status_code == 200
 
-    def test_09b_technicien_cannot_delete(self, api_client, tech_user, machine):
+    def test_09b_technicien_can_delete_inspection_in_scope(self, api_client, tech_user, machine):
         inspection = create_inspection(machine, tech_user)
+        # L'inspection doit être dans son périmètre pour tester le refus lié au rôle.
+        UserScope.objects.create(utilisateur=tech_user,
+                                 ligne=machine.ligne_production)
         api_client.force_authenticate(tech_user)
         r = api_client.delete(f'/api/inspections/{inspection.id}/')
-        assert r.status_code == 403
-        assert InspectionVisuelle.objects.filter(id=inspection.id).exists()
+        assert r.status_code == 204
+        assert not InspectionVisuelle.objects.filter(id=inspection.id).exists()
 
 
 # ── 10. Restrictions OPERATEUR ────────────────────────────────────────────────

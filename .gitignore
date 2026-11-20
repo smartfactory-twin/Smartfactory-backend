@@ -20,6 +20,11 @@ db.sqlite3
 # Fichiers médias uploadés (non versionnés)
 media/
 
+# Données de benchmark et artefacts ML générés localement
+ml/data/
+ml/artifacts/*.joblib
+ml/artifacts/*training_report.json
+
 # Fichiers statiques collectés
 staticfiles/
 

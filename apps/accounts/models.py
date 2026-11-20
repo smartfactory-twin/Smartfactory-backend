@@ -88,6 +88,39 @@ class Utilisateur(AbstractBaseUser, PermissionsMixin):
     def is_operateur(self):
         return self.role == self.Role.OPERATEUR
 
+
+class AuditLog(models.Model):
+    """Journal non modifiable des changements et de leur résultat.
+
+    Request bodies and credentials are intentionally never stored. `acteur_email`
+    and `acteur_role` are snapshots so the record remains attributable if the
+    corresponding user is later disabled or removed.
+    """
+
+    acteur = models.ForeignKey(
+        'accounts.Utilisateur', null=True, blank=True, on_delete=models.SET_NULL,
+        related_name='audit_events', verbose_name='Acteur',
+    )
+    acteur_email = models.EmailField(blank=True, default='', verbose_name='E-mail acteur')
+    acteur_role = models.CharField(max_length=20, blank=True, default='', verbose_name='Rôle acteur')
+    action = models.CharField(max_length=255, verbose_name='Action')
+    methode = models.CharField(max_length=10, verbose_name='Méthode HTTP')
+    chemin = models.CharField(max_length=512, verbose_name='Chemin API')
+    code_http = models.PositiveSmallIntegerField(verbose_name='Code HTTP')
+    adresse_ip = models.GenericIPAddressField(null=True, blank=True, verbose_name='Adresse IP')
+    user_agent = models.CharField(max_length=512, blank=True, default='')
+    details = models.JSONField(default=dict, blank=True)
+    cree_le = models.DateTimeField(auto_now_add=True, db_index=True, verbose_name='Date')
+
+    class Meta:
+        ordering = ['-cree_le', '-pk']
+        indexes = [models.Index(fields=['action', '-cree_le'], name='accounts_audit_action_dt_idx')]
+        verbose_name = "Événement d'audit"
+        verbose_name_plural = "Journal d'audit"
+
+    def __str__(self):
+        return f'{self.action} — {self.acteur_email or "anonyme"} — {self.cree_le:%Y-%m-%d %H:%M:%S}'
+
     @property
     def is_temp_password_expired(self):
         """Vérifie si le mot de passe temporaire a dépassé le délai de 48 heures."""
@@ -96,4 +129,23 @@ class Utilisateur(AbstractBaseUser, PermissionsMixin):
             from datetime import timedelta
             return (timezone.now() - self.date_joined) > timedelta(hours=48)
         return False
+
+
+class VocalCommand(models.Model):
+    """Journal texte des commandes vocales (aucun enregistrement audio)."""
+    utilisateur = models.ForeignKey(
+        'accounts.Utilisateur', on_delete=models.CASCADE, related_name='commandes_vocales'
+    )
+    texte = models.CharField(max_length=1000)
+    intention = models.CharField(max_length=80, blank=True, default='')
+    confiance = models.FloatField(null=True, blank=True)
+    resultat = models.CharField(max_length=1000, blank=True, default='')
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-created_at', '-pk']
+        indexes = [models.Index(fields=['utilisateur', '-created_at'])]
+
+    def __str__(self):
+        return f'{self.utilisateur_id} — {self.intention} — {self.created_at:%Y-%m-%d %H:%M}'
 
