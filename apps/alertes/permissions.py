@@ -26,7 +26,7 @@ class AlerteAccessPermission(BasePermission):
 
     ADMIN     : lecture + acquittement + résolution + préparation d'OT.
     TECHNICIEN: lecture + acquittement + résolution + préparation d'OT.
-    OPERATEUR : **lecture seule** (consultation), aucune écriture.
+    OPERATEUR : lecture + acquittement (conformément au rôle défini dans le cahier).
 
     Les seuils des capteurs — les « règles d'alerte » au sens de l'UC-26 —
     ne sont pas modifiables ici : ils restent gérés par `SensorViewSet`
@@ -48,6 +48,8 @@ class AlerteAccessPermission(BasePermission):
             # alerte n'existent pas (elle est générée, jamais supprimée).
             return request.method in (*SAFE_METHODS, 'POST')
         if getattr(request.user, 'role', None) == 'OPERATEUR':
+            if getattr(view, 'action', None) == 'acquitter':
+                return request.method == 'POST'
             return request.method in SAFE_METHODS
         return False
 

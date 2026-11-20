@@ -30,6 +30,8 @@ from .serializers import (
     ChangePasswordSerializer,
 )
 from .permissions import IsAdmin
+from .models import AuditLog, VocalCommand
+from .serializers import AuditLogSerializer, VocalCommandSerializer
 from .throttles import LoginThrottle, PasswordResetThrottle
 from .email_utils import send_html_email, LOGO_CID
 
@@ -47,6 +49,51 @@ class PerimetreInvalide(Exception):
     def __init__(self, message):
         super().__init__(message)
         self.message = message
+
+
+class VocalCommandHistoryView(APIView):
+    """Historique textuel privé; l'administrateur peut consulter le journal global."""
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        queryset = VocalCommand.objects.select_related('utilisateur')
+        if request.user.role != User.Role.ADMIN:
+            queryset = queryset.filter(utilisateur=request.user)
+        serializer = VocalCommandSerializer(queryset[:100], many=True)
+        return Response(serializer.data)
+
+    def post(self, request):
+        serializer = VocalCommandSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        entry = serializer.save(utilisateur=request.user)
+        return Response(VocalCommandSerializer(entry).data, status=status.HTTP_201_CREATED)
+
+
+class AuditLogListView(APIView):
+    """Historique d’audit en lecture seule, réservé aux administrateurs."""
+    permission_classes = [IsAdmin]
+
+    def get(self, request):
+        try:
+            limit = min(max(int(request.query_params.get('limit', 50)), 1), 200)
+        except (TypeError, ValueError):
+            return Response({'limit': ['Utilisez un entier entre 1 et 200.']},
+                            status=status.HTTP_400_BAD_REQUEST)
+
+        queryset = AuditLog.objects.select_related('acteur').all()
+        before_id = request.query_params.get('before_id')
+        if before_id:
+            try:
+                queryset = queryset.filter(pk__lt=int(before_id))
+            except (TypeError, ValueError):
+                return Response({'before_id': ['Utilisez un identifiant entier.']},
+                                status=status.HTTP_400_BAD_REQUEST)
+        rows = list(queryset[:limit])
+        return Response({
+            'count': queryset.count(),
+            'results': AuditLogSerializer(rows, many=True).data,
+            'next_before_id': rows[-1].pk if len(rows) == limit else None,
+        })
 
 
 def _valider_perimetres(perimetres):

@@ -10,11 +10,20 @@ from rest_framework.views import APIView
 
 from apps.alertes.models import Alerte
 from .cmapss_ml import artifact_status
+from .metropt_ml import metropt_artifact_status
 from .models import Machine, Reading, Sensor
 from .permissions import scope_queryset_machine, scope_queryset_sensor
 
 
 def _score(sensor, value, values):
+    if sensor.seuil_min is None or sensor.seuil_max is None:
+        # Sans plage complète, seul le score statistique reste calculable.
+        if not values:
+            return 0.0
+        center = median(values)
+        spread = pstdev(values) if len(values) > 1 else 0.0
+        statistical = max(0.0, abs(value - center) / max(spread, 1e-9) - 2) / 6
+        return min(1.0, statistical)
     span = max(float(sensor.seuil_max - sensor.seuil_min), 1e-9)
     outside = max(0.0, (value - sensor.seuil_max) / span, (sensor.seuil_min - value) / span)
     center = median(values) if values else (sensor.seuil_min + sensor.seuil_max) / 2
@@ -108,13 +117,16 @@ class AiModelsAPIView(APIView):
 
     def get(self, request):
         rul = artifact_status()
+        metropt = metropt_artifact_status()
         metadata = rul.get('metadata') or {}
         metrics = metadata.get('official_test') or {}
+        metropt_metadata = metropt.get('metadata') or {}
         return Response({
             'models': [
                 {'id': 'sensor-statistics', 'name': 'Score statistique d’anomalie', 'state': 'ACTIF', 'dataset': 'Mesures réelles enregistrées dans SmartFactory', 'metrics': None},
                 {'id': 'lstm-autoencoder', 'name': 'LSTM Autoencoder', 'state': 'NON_ENTRAINE', 'dataset': 'Aucune série temporelle industrielle annotée configurée', 'metrics': None},
                 {'id': 'cmapss-rul', 'name': rul.get('model_name', 'HistGradientBoostingRegressor'), 'state': 'PRET' if rul.get('ready') else 'NON_ENTRAINE', 'dataset': 'NASA C-MAPSS (turbofan simulé)', 'metrics': metrics, 'details': {key: metadata.get(key) for key in ('training_engines', 'training_rows', 'feature_count', 'window_size', 'rul_cap_cycles', 'validation') if key in metadata}, 'detail': rul.get('detail')},
+                {'id': 'metropt3-anomaly', 'name': metropt.get('model_name', 'IsolationForest'), 'state': 'PRET' if metropt.get('ready') else 'NON_ENTRAINE', 'dataset': 'MetroPT-3 · télémétrie réelle d’un compresseur ferroviaire (benchmark)', 'metrics': metropt_metadata.get('metrics'), 'details': metropt_metadata, 'detail': metropt.get('detail')},
             ],
-            'note': 'Les performances ne sont pas inventées. Le score d’anomalie est statistique; le modèle C-MAPSS reste distinct des machines industrielles.',
+            'note': 'Le benchmark MetroPT-3 est entraîné sans étiquette : la référence est février 2020 et le test utilise les fenêtres de panne publiées par UCI. Les mesures viennent d’un compresseur ferroviaire et ne valident pas directement les machines SmartFactory.',
         })

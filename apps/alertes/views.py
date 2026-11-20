@@ -148,13 +148,34 @@ class AlerteViewSet(viewsets.ReadOnlyModelViewSet):
     # ── Préparation d'un ordre de travail (§14) ────────────────────────────
     @action(detail=True, methods=['post'], url_path='preparer-ot')
     def preparer_ot(self, request, pk=None):
-        """Renvoie les informations pré-remplies d'un futur ordre de travail.
-
-        Le Module 9 (CMMS) n'est pas développé : **rien n'est créé ni
-        enregistré**, seul le récapitulatif repris par l'IHM est renvoyé.
-        """
+        """Crée (ou retrouve) l'ordre de travail correctif lié à l'alerte."""
         alerte = self.get_object()
+        from apps.equipements.models import OrdreTravail
+        from apps.equipements.serializers import OrdreTravailSerializer
+
+        ordre = OrdreTravail.objects.filter(from_alert=alerte.pk).first()
+        if ordre is None:
+            priorite = {
+                Alerte.Niveau.CRITIQUE: OrdreTravail.Priorite.HAUTE,
+                Alerte.Niveau.MAJEURE: OrdreTravail.Priorite.MOYENNE,
+                Alerte.Niveau.MINEURE: OrdreTravail.Priorite.BASSE,
+            }.get(alerte.niveau, OrdreTravail.Priorite.MOYENNE)
+            ordre = OrdreTravail.objects.create(
+                machine=alerte.machine,
+                type_ordre=OrdreTravail.Type.CORRECTIVE,
+                priorite=priorite,
+                titre=f'{alerte.reference} — {alerte.machine.nom}: {alerte.message}',
+                from_alert=alerte.pk,
+                cree_par=request.user,
+            )
+            ordre.historique = [{
+                'statut': ordre.statut,
+                'date': ordre.created_at.isoformat(),
+                'source': f'alerte {alerte.reference}',
+            }]
+            ordre.save(update_fields=['historique', 'updated_at'])
         return Response({
+            'ordre': OrdreTravailSerializer(ordre).data,
             'alerte_id': alerte.pk,
             'reference': alerte.reference,
             'machine': alerte.machine_id,
@@ -182,11 +203,8 @@ class AlerteViewSet(viewsets.ReadOnlyModelViewSet):
                 f'de {alerte.seuil} {alerte.unite} '
                 f'(dépassement de {alerte.depassement:.2f}).'
             ),
-            'module_9_disponible': False,
-            'message': (
-                "Le Module 9 (CMMS) n'est pas encore développé : ces informations "
-                "seront reprises à l'identique lors de sa livraison."
-            ),
+            'module_9_disponible': True,
+            'message': f'Ordre de travail OT-{ordre.pk} créé ou déjà associé à cette alerte.',
         }, status=status.HTTP_200_OK)
 
     # ── Compteurs (badge / tableau de bord) ────────────────────────────────

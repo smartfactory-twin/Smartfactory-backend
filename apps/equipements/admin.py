@@ -37,9 +37,13 @@ class ComposantAdmin(admin.ModelAdmin):
 
 @admin.register(Sensor)
 class SensorAdmin(admin.ModelAdmin):
-    list_display = ['identifiant', 'nom', 'type_capteur', 'machine', 'unite', 'actif']
-    list_filter = ['type_capteur', 'actif', 'machine__ligne_production__zone__usine']
+    list_display = ['identifiant', 'nom', 'type_capteur', 'sensor_role', 'machine', 'unite', 'criticality', 'is_ai_eligible', 'actif']
+    list_filter = ['type_capteur', 'sensor_role', 'criticality', 'is_ai_eligible', 'actif', 'machine__ligne_production__zone__usine']
     search_fields = ['identifiant', 'nom', 'machine__nom', 'machine__identifiant_interne']
+    fieldsets = (
+        ('Capteur', {'fields': ('identifiant', 'nom', 'type_capteur', 'machine', 'unite', 'frequence_mesure', 'seuil_min', 'seuil_max', 'actif', 'description')}),
+        ('Métadonnées IA', {'fields': ('sensor_role', 'nominal_min', 'nominal_max', 'criticality', 'is_ai_eligible')}),
+    )
 
 
 @admin.register(Reading)

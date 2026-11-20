@@ -1,4 +1,4 @@
-"""Module 8 — Alertes & Notifications (UC-26 à UC-29).
+"""Module 8 — Alertes & Notifications
 
 Aucun seuil n'est stocké ici : les règles d'alerte s'appuient **exclusivement**
 sur `Sensor.seuil_min` / `Sensor.seuil_max` (Module 3), qui restent la source de
@@ -11,9 +11,6 @@ Trois objets :
 * `PreferenceNotification` — les canaux de notification choisis (UC-28).
 """
 from django.db import models
-
-
-# ── UC-27 — Niveaux d'alerte ─────────────────────────────────────────────────
 # L'ordre de ce tuple définit la gravité croissante : il sert à comparer deux
 # niveaux (escalade d'une alerte ouverte).
 ORDRE_NIVEAUX = ('INFORMATION', 'MINEURE', 'MAJEURE', 'CRITIQUE')

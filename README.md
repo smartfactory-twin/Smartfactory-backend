@@ -160,3 +160,13 @@ pytest apps/accounts/tests/test_auth.py
 | ADMIN | Administrateur — accès total |
 | TECHNICIEN | Technicien terrain |
 | OPERATEUR | Opérateur (par défaut à l'inscription) |
+# Disponibilité des données pour l’IA
+
+`GET /api/ai/readiness/` (ADMIN et TECHNICIEN, restreint au périmètre UserScope)
+indique si chaque machine dispose d’un historique exploitable. Les critères par
+défaut sont `AI_READINESS_MIN_HISTORY_DAYS=7`,
+`AI_READINESS_MIN_VALID_MEASURES=1000` et `AI_READINESS_MAX_MISSING_RATE=5.0`
+(pourcentage). Ils peuvent être surchargés par variables d’environnement et
+sont renvoyés dans `criteria`. Le taux de valeurs manquantes est `null` si la
+période d’échantillonnage est inconnue. Ces indicateurs de disponibilité ne
+garantissent pas à eux seuls la qualité ou la validité industrielle d’un modèle.

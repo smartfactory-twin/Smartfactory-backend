@@ -1,12 +1,38 @@
 from rest_framework import serializers
-from rest_framework import serializers
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 from django.contrib.auth import get_user_model
 from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError
+from .models import AuditLog, VocalCommand
 
 User = get_user_model()
 
+
+class VocalCommandSerializer(serializers.ModelSerializer):
+    utilisateur = serializers.SerializerMethodField()
+
+    class Meta:
+        model = VocalCommand
+        fields = ['id', 'texte', 'intention', 'confiance', 'resultat', 'created_at', 'utilisateur']
+        read_only_fields = ['id', 'created_at', 'utilisateur']
+
+    def validate_confiance(self, value):
+        if value is not None and not 0 <= value <= 1:
+            raise serializers.ValidationError('La confiance doit être comprise entre 0 et 1.')
+        return value
+
+    def get_utilisateur(self, obj):
+        return f'{obj.utilisateur.prenom} {obj.utilisateur.nom}'.strip()
+
+
+class AuditLogSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = AuditLog
+        fields = [
+            'id', 'acteur_email', 'acteur_role', 'action', 'methode', 'chemin',
+            'code_http', 'adresse_ip', 'user_agent', 'details', 'cree_le',
+        ]
+        read_only_fields = fields
 
 class UserSerializer(serializers.ModelSerializer):
     """Sérialiseur de base pour les infos utilisateur (sans le mot de passe)."""
