@@ -19,11 +19,11 @@ def data_text(value):
     return {'kind': 'untrusted_data', 'value': str(value or '')[:MAX_FREE_TEXT]}
 
 
-TOOL_SCHEMAS = [
-    ('search_machines', 'Rechercher des machines visibles dans le périmètre utilisateur.', {
-        'query': {'type': 'string', 'minLength': 1, 'maxLength': 100},
-        'limit': {'type': 'integer', 'minimum': 1, 'maximum': 10},
-    }, ['query']),
+READ_TOOL_SCHEMAS = [
+    ('search_machines', 'Lister les machines visibles dans le périmètre utilisateur. Sans query, liste toutes les machines visibles. query est facultatif ; une valeur vide ou générique (toutes, tous, all, *) signifie aucun filtre. limit est facultatif ; une limite absente, nulle, négative ou non numérique utilise la limite par défaut de 100, et les limites positives sont plafonnées à 100.', {
+        'query': {'type': ['string', 'null'], 'maxLength': 100},
+        'limit': {'type': ['integer', 'string', 'null'], 'maxLength': 20},
+    }, []),
     ('get_machine', 'Obtenir une machine par identifiant interne exact ou nom exact.', {
         'machine_ref': {'type': 'string', 'minLength': 1, 'maxLength': 100},
     }, ['machine_ref']),
@@ -77,6 +77,33 @@ TOOL_SCHEMAS = [
     }, []),
 ]
 
+WRITE_TOOL_SCHEMAS = [
+    ('acknowledge_alert', 'Proposer l’acquittement d’une alerte visible. Cette action ne sera exécutée qu’après confirmation explicite via l’API.', {
+        'alert_id': {'type': 'integer', 'minimum': 1},
+        'comment': {'type': 'string', 'minLength': 1, 'maxLength': 2000},
+    }, ['alert_id', 'comment']),
+    ('create_work_order', 'Proposer la création d’un ordre de travail. Ne crée rien avant confirmation explicite via l’API.', {
+        'machine_id': {'type': 'integer', 'minimum': 1},
+        'type': {'type': 'string', 'enum': ['Corrective', 'Préventive', 'Inspection']},
+        'priority': {'type': 'string', 'enum': ['Haute', 'Moyenne', 'Basse']},
+        'title': {'type': 'string', 'minLength': 1, 'maxLength': 300},
+        'assignee': {'type': 'string', 'maxLength': 150},
+    }, ['machine_id', 'type', 'priority', 'title']),
+    ('update_work_order_status', 'Proposer l’étape suivante du workflow d’un OT visible. Ne modifie rien avant confirmation explicite via l’API.', {
+        'work_order_id': {'type': 'integer', 'minimum': 1},
+        'status': {'type': 'string', 'enum': ['Créé', 'Assigné', 'En cours', 'En attente pièces', 'Rapport déposé', 'Validé', 'Clôturé']},
+    }, ['work_order_id', 'status']),
+    ('submit_work_order_report', 'Proposer le dépôt d’un rapport sur un OT en cours ou en attente de pièces. Ne dépose rien avant confirmation explicite via l’API.', {
+        'work_order_id': {'type': 'integer', 'minimum': 1},
+        'work_done': {'type': 'string', 'minLength': 1, 'maxLength': 5000},
+        'duration': {'type': 'number', 'minimum': 0, 'maximum': 100000},
+        'observations': {'type': 'string', 'maxLength': 5000},
+        'parts': {'type': 'array', 'maxItems': 50},
+        'signatory': {'type': 'string', 'minLength': 1, 'maxLength': 200},
+    }, ['work_order_id', 'work_done', 'duration', 'signatory']),
+]
+TOOL_SCHEMAS = [*READ_TOOL_SCHEMAS, *WRITE_TOOL_SCHEMAS]
+
 
 LLM_TOOLS = [{
     'type': 'function',
@@ -90,8 +117,10 @@ LLM_TOOLS = [{
     },
 } for name, description, properties, required in TOOL_SCHEMAS]
 
-TOOL_PROPERTIES = {name: properties for name, _, properties, _ in TOOL_SCHEMAS}
+TOOL_PROPERTIES = {name: properties for name, _, properties, _ in READ_TOOL_SCHEMAS}
+WRITE_TOOL_PROPERTIES = {name: properties for name, _, properties, _ in WRITE_TOOL_SCHEMAS}
 TOOL_REQUIRED = {name: set(required) for name, _, _, required in TOOL_SCHEMAS}
+ALL_TOOL_PROPERTIES = {**TOOL_PROPERTIES, **WRITE_TOOL_PROPERTIES}
 
 
 class ToolCallError(Exception):
@@ -101,22 +130,38 @@ class ToolCallError(Exception):
 
 
 def _validate_arguments(name, arguments):
-    if name not in TOOL_PROPERTIES:
+    if name not in ALL_TOOL_PROPERTIES:
         raise ToolCallError('unknown_tool', 'Le modèle a demandé un outil non autorisé.')
     if not isinstance(arguments, dict):
         raise ToolCallError('invalid_tool_arguments', 'Les paramètres de l’outil sont invalides.')
-    schema = TOOL_PROPERTIES[name]
+    schema = ALL_TOOL_PROPERTIES[name]
     if set(arguments) - set(schema) or TOOL_REQUIRED[name] - set(arguments):
         raise ToolCallError('invalid_tool_arguments', 'Les paramètres de l’outil sont invalides.')
     for key, value in arguments.items():
         rule = schema[key]
         kind = rule['type']
-        valid_type = (isinstance(value, str) if kind == 'string' else
-                      isinstance(value, (int, float)) and not isinstance(value, bool) if kind == 'number' else
-                      isinstance(value, int) and not isinstance(value, bool))
+        if value is None and kind == ['string', 'null']:
+            continue
+        if isinstance(kind, list):
+            valid_type = any((isinstance(value, str) if candidate == 'string' else
+                              isinstance(value, list) if candidate == 'array' else
+                              isinstance(value, int) and not isinstance(value, bool) if candidate == 'integer' else
+                              isinstance(value, (int, float)) and not isinstance(value, bool) if candidate == 'number' else
+                              value is None if candidate == 'null' else False) for candidate in kind)
+            if not valid_type:
+                raise ToolCallError('invalid_tool_arguments', 'Les paramètres de l’outil sont invalides.')
+            if value is None:
+                continue
+        else:
+            valid_type = (isinstance(value, str) if kind == 'string' else
+                          isinstance(value, list) if kind == 'array' else
+                          isinstance(value, (int, float)) and not isinstance(value, bool) if kind == 'number' else
+                          isinstance(value, int) and not isinstance(value, bool))
         if not valid_type:
             raise ToolCallError('invalid_tool_arguments', 'Les paramètres de l’outil sont invalides.')
         if kind == 'string' and (len(value) > rule.get('maxLength', 1000) or len(value) < rule.get('minLength', 0)):
+            raise ToolCallError('invalid_tool_arguments', 'Les paramètres de l’outil sont invalides.')
+        if kind == 'array' and len(value) > rule.get('maxItems', 100):
             raise ToolCallError('invalid_tool_arguments', 'Les paramètres de l’outil sont invalides.')
         if kind in ('number', 'integer') and not rule.get('minimum', float('-inf')) <= value <= rule.get('maximum', float('inf')):
             raise ToolCallError('invalid_tool_arguments', 'Les paramètres de l’outil sont invalides.')
@@ -265,7 +310,51 @@ def execute_tool(request, name, raw_arguments):
     limit = args.get('limit', 10)
 
     if name == 'search_machines':
-        return _bounded(_paged_rows(request, '/api/equipements/machines/', {'search': args['query']}, limit, _machine))
+        query = args.get('query')
+        generic_queries = {'', '*', 'all', 'tous', 'toutes', 'tout', 'toute', 'machines'}
+        normalized_query = query.strip() if isinstance(query, str) else ''
+        if normalized_query.casefold() in generic_queries:
+            normalized_query = ''
+        requested_limit = args.get('limit')
+        try:
+            parsed_limit = int(requested_limit) if not isinstance(requested_limit, bool) else 0
+        except (TypeError, ValueError, OverflowError):
+            parsed_limit = 0
+        default_limit = 100
+        normalized_limit = min(100, parsed_limit) if parsed_limit > 0 else default_limit
+        page_size = min(100, normalized_limit)
+        rows = []
+        total_count = 0
+        next_page = 1
+        while len(rows) < normalized_limit:
+            params = {'page': next_page, 'page_size': page_size}
+            if normalized_query:
+                params['search'] = normalized_query
+            page, status_code = _call_api(request, 'GET', '/api/equipements/machines/', params)
+            if status_code >= 400:
+                return _bounded({
+                    'error': page['error'], 'parameters_applied': {
+                        'search': normalized_query or None, 'limit': normalized_limit,
+                    }, 'truncated': bool(rows), 'incomplete': bool(rows),
+                })
+            page_rows = page.get('results', [])
+            if not isinstance(page_rows, list):
+                page_rows = []
+            rows.extend(page_rows[:normalized_limit - len(rows)])
+            total_count = page.get('count', len(rows))
+            if not page.get('next') or not page_rows:
+                break
+            next_page += 1
+        truncated = len(rows) < total_count
+        output = {
+            'results': [_machine(row) for row in rows],
+            'count': total_count,
+            'count_returned': len(rows),
+            'parameters_applied': {'search': normalized_query or None, 'limit': normalized_limit},
+            'truncated': truncated,
+            'incomplete': truncated,
+        }
+        return _bounded(output)
     if name == 'get_machine':
         row, error = _machine_match(request, args['machine_ref'])
         if error:

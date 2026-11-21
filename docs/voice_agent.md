@@ -43,12 +43,21 @@ Définir dans l'environnement (ou `.env`, jamais dans le code) :
 | `LLM_MODEL` | Identifiant du modèle |
 | `LLM_API_KEY` | Clé du fournisseur ; jamais incluse dans les erreurs ou journaux |
 | `LLM_TIMEOUT_SECONDS` | Timeout fournisseur positif, plafonné par le délai restant de la requête |
+| `LLM_USER_AGENT` | User-Agent HTTP optionnel ; valeur par défaut `SmartFactoryTwin/1.0` |
 
 Le client appelle `{LLM_BASE_URL}/chat/completions` avec tool calling, température zéro et `max_tokens=700`. `.env.example` donne les emplacements sans valeur secrète.
 
+## Écritures : propositions et confirmation explicite
+
+Les outils `acknowledge_alert`, `create_work_order`, `update_work_order_status` et `submit_work_order_report` ne font qu'enregistrer une `VoiceActionProposal`. L'agent renvoie son identifiant, un résumé, l'aperçu complet et un `spoken_summary` de 250 caractères maximum. Le LLM n'a pas d'outil de confirmation. Répondre « oui » dans le chat vocal ou texte ne déclenche jamais l'écriture ; il faut appeler l'endpoint `POST /api/voice/proposals/{id}/confirm/` avec le JWT de l'utilisateur. `POST /api/voice/proposals/{id}/cancel/` annule ; `GET /api/voice/proposals/pending/` ne montre que les propositions de l'utilisateur connecté.
+
+La proposition expire après `VOICE_PROPOSAL_TTL_SECONDS` (120 s par défaut). Une seule proposition en attente par utilisateur et conversation est conservée : une nouvelle remplace l'ancienne. La création est limitée par `VOICE_PROPOSAL_HOURLY_LIMIT` (10/h). La confirmation verrouille la ligne, vérifie son empreinte SHA-256, expire paresseusement, revalide rôle, périmètre, état et serializers existants, puis appelle l'endpoint métier avec le JWT du demandeur. Les actions sont journalisées avec l'acteur et les paramètres nécessaires ; aucun JWT, clé LLM ni audio n'est enregistré. `interaction_mode` (`text` ou `voice`) est conservé dans le journal, mais ne change jamais les règles.
+
+Une commande `python manage.py purge_voice_proposals --days 30` supprime les propositions anciennes non en attente ; les propositions pending expirées sont d'abord passées à `expired`.
+
 ## Limites connues
 
-- Phase texte uniquement : aucune transcription Whisper, interface, synthèse vocale, confirmation d'écriture ou outil d'écriture.
+- Phase texte uniquement : aucune transcription Whisper, interface ni synthèse vocale.
 - Le résultat statistique/benchmark et la disponibilité RUL ne deviennent pas des diagnostics industriels ; la RUL est explicitement indisponible pour les machines SmartFactory.
 - Le nettoyage des conversations expirées n'est pas planifié : les conversations expirées ne sont plus utilisables, mais restent stockées jusqu'à une politique de purge ultérieure.
 - La liste d'alertes d'un opérateur reste soumise aux permissions de lecture historiques ; l'assistant ne surélève pas les droits.

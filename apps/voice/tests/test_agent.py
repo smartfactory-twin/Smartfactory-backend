@@ -1,5 +1,8 @@
 import json
+import logging
 from datetime import timedelta
+from io import BytesIO
+from urllib.error import HTTPError
 
 import pytest
 from django.core.cache import cache
@@ -110,6 +113,49 @@ def test_machine_search_obeys_existing_role_scope_and_hides_other_machine(
     else:
         assert ids == [voice_setup['machine_a'].id]
         assert voice_setup['machine_b'].identifiant_interne not in result_message['content']
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize('arguments', [
+    {}, {'query': ''}, {'query': None}, {'query': '*'}, {'query': 'all'},
+    {'query': 'toutes'}, {'query': 'tous'}, {'query': 'machines'},
+    {'query': '', 'limit': 0}, {'query': '', 'limit': -5},
+    {'query': '', 'limit': 'abc'}, {'query': '*', 'limit': 1},
+])
+@pytest.mark.parametrize('role_key', ['admin', 'tech'])
+def test_agent_lists_all_machines_for_generic_query_and_respects_scope(
+    voice_setup, monkeypatch, role_key, arguments,
+):
+    fake = ScriptedLLM(tool_call('search_machines', arguments), {'content': 'Voici les machines.'})
+    install_llm(monkeypatch, fake)
+    response = make_client(voice_setup[role_key]).post(
+        '/api/voice/agent/', {'message': 'Liste les machines'}, format='json',
+    )
+    assert response.status_code == 200, response.data
+    tool_message = next(item for item in fake.seen[1]['messages'] if item['role'] == 'tool')
+    tool_result = json.loads(tool_message['content'])
+    if role_key == 'admin':
+        visible = make_client(voice_setup['admin']).get('/api/equipements/machines/')
+        assert tool_result['count'] == visible.data['count']
+        assert {row['id'] for row in tool_result['results']} == {
+            row['id'] for row in visible.data['results'][:len(tool_result['results'])]
+        }
+        raw_limit = arguments.get('limit')
+        try:
+            parsed_limit = int(raw_limit) if not isinstance(raw_limit, bool) else 0
+        except (TypeError, ValueError, OverflowError):
+            parsed_limit = 0
+        effective_limit = min(100, parsed_limit) if parsed_limit > 0 else 100
+        assert tool_result['parameters_applied']['limit'] == effective_limit
+        assert len(tool_result['results']) == min(effective_limit, tool_result['count'])
+        assert tool_result['truncated'] is (effective_limit < tool_result['count'])
+    else:
+        visible = make_client(voice_setup['tech']).get('/api/equipements/machines/')
+        assert tool_result['count'] == visible.data['count'] == 1
+        assert [row['id'] for row in tool_result['results']] == [voice_setup['machine_a'].id]
+        assert tool_result['truncated'] is False
+    assert tool_result['parameters_applied']['search'] is None
+    assert tool_result['incomplete'] is tool_result['truncated']
 
 
 @pytest.mark.django_db
@@ -306,6 +352,100 @@ def test_llm_unavailable_returns_503_and_safe_frontend_fallback(voice_setup, mon
     assert response.status_code == 503
     assert 'mode règles actuel' in response.data['fallback']
     assert VoiceAgentRequest.objects.latest('pk').erreur == 'llm_unavailable'
+
+
+@pytest.mark.django_db
+def test_provider_error_logs_diagnostics_without_api_key_or_jwt(
+    voice_setup, monkeypatch, caplog,
+):
+    from apps.voice.llm import OpenAICompatibleClient
+
+    api_key = 'groq-test-secret-key-123456789'
+    jwt_value = 'eyJhbGciOiJIUzI1NiJ9.eyJ1c2VyX2lkIjoxfQ.signature'
+    provider_body = (
+        f'{{"error":"bad request","api_key":"{api_key}","detail":"Bearer {jwt_value}"}}'
+        + ('x' * 900)
+    ).encode()
+
+    def provider_error(request, timeout):
+        raise HTTPError(request.full_url, 400, 'Bad Request', {}, BytesIO(provider_body))
+
+    monkeypatch.setattr('apps.voice.llm.urlopen', provider_error)
+    install_llm(monkeypatch, OpenAICompatibleClient())
+    caplog.set_level(logging.WARNING, logger='apps.voice')
+    provider_logger = logging.getLogger('apps.voice.llm')
+    provider_logger.addHandler(caplog.handler)
+
+    try:
+        with override_settings(
+            LLM_PROVIDER='groq',
+            LLM_BASE_URL='https://api.groq.com/openai/v1',
+            LLM_MODEL='openai/gpt-oss-120b',
+            LLM_API_KEY=api_key,
+            LLM_TIMEOUT_SECONDS=10,
+        ):
+            response = make_client(voice_setup['admin']).post(
+                '/api/voice/agent/', {'message': 'Bonjour'}, format='json',
+            )
+    finally:
+        provider_logger.removeHandler(caplog.handler)
+
+    assert response.status_code == 503
+    response_text = json.dumps(response.data)
+    assert api_key not in response_text
+    assert jwt_value not in response_text
+    diagnostic = next(record.getMessage() for record in caplog.records
+                      if 'LLM provider request failed' in record.getMessage())
+    assert 'exception_type=HTTPError' in diagnostic
+    assert 'http_status=400' in diagnostic
+    assert 'bad request' in diagnostic
+    assert api_key not in diagnostic
+    assert jwt_value not in diagnostic
+    assert len(diagnostic.split('provider_body=', 1)[1]) == 500
+
+
+@pytest.mark.django_db
+def test_llm_request_sends_configured_user_agent_without_changing_payload(monkeypatch):
+    from apps.voice.llm import OpenAICompatibleClient
+    from apps.voice.tools import LLM_TOOLS
+
+    class FakeResponse:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self, _limit):
+            return b'{"choices":[{"message":{"content":"OK"}}]}'
+
+    captured = {}
+
+    def fake_transport(request, timeout):
+        captured['request'] = request
+        captured['timeout'] = timeout
+        return FakeResponse()
+
+    monkeypatch.setattr('apps.voice.llm.urlopen', fake_transport)
+    messages = [{'role': 'user', 'content': 'Liste les machines'}]
+    with override_settings(
+        LLM_PROVIDER='groq', LLM_BASE_URL='https://api.groq.com/openai/v1',
+        LLM_MODEL='openai/gpt-oss-120b', LLM_API_KEY='test-secret-key',
+        LLM_TIMEOUT_SECONDS=12, LLM_USER_AGENT='SmartFactoryTest/2.0',
+    ):
+        result = OpenAICompatibleClient().complete(messages, LLM_TOOLS, timeout=8)
+
+    assert result == {'content': 'OK'}
+    request = captured['request']
+    assert request.get_header('User-agent') == 'SmartFactoryTest/2.0'
+    sent_payload = json.loads(request.data)
+    assert sent_payload == {
+        'model': 'openai/gpt-oss-120b', 'messages': messages, 'tools': LLM_TOOLS,
+        'tool_choice': 'auto', 'max_tokens': 700, 'temperature': 0,
+    }
+    assert captured['timeout'] == 8
 
 
 @pytest.mark.django_db
