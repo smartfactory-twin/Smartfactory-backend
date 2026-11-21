@@ -20,4 +20,5 @@ REST_FRAMEWORK['DEFAULT_THROTTLE_RATES'] = {
     'user': '1000/hour',
     'login': '1000/min',
     'password_reset': '1000/hour',
+    'voice_agent': '1000/min',
 }
