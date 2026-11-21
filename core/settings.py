@@ -30,6 +30,7 @@ LOCAL_APPS = [
     'apps.accounts',
     'apps.equipements',
     'apps.alertes',
+    'apps.voice',
 ]
 # Daphne doit précéder django.contrib.staticfiles (contrôle système daphne.E001).
 INSTALLED_APPS = ['daphne'] + DJANGO_APPS + ['django.contrib.staticfiles'] + THIRD_PARTY_APPS + LOCAL_APPS
@@ -205,8 +206,16 @@ REST_FRAMEWORK = {
         'user': '1000/hour',
         'login': '5/min',
         'password_reset': '3/hour',
+        'voice_agent': '20/min',
     },
 }
+
+# Assistant vocal texte — configuration du fournisseur compatible OpenAI.
+LLM_PROVIDER = config('LLM_PROVIDER', default='')
+LLM_BASE_URL = config('LLM_BASE_URL', default='')
+LLM_MODEL = config('LLM_MODEL', default='')
+LLM_API_KEY = config('LLM_API_KEY', default='')
+LLM_TIMEOUT_SECONDS = config('LLM_TIMEOUT_SECONDS', default=20, cast=int)
 
 # ─── JWT ─────────────────────────────────────────────────────────────────────
 SIMPLE_JWT = {

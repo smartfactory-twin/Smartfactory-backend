@@ -20,12 +20,15 @@ Endpoints exposés :
 
 Toutes les lectures sont filtrées côté backend par le périmètre `UserScope`.
 """
+from datetime import datetime, timedelta
+
 from django.db.models import Case, Count, IntegerField, Value, When
 from django.utils import timezone
 from rest_framework import filters, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
+from rest_framework.exceptions import ValidationError
 from rest_framework.views import APIView
 from django_filters.rest_framework import DjangoFilterBackend
 
@@ -76,6 +79,47 @@ class AlerteOrderingFilter(filters.OrderingFilter):
         autres = [p for p in params.split(',') if p.lstrip('-') != 'niveau']
         tri_niveau = 'gravite' if params.split(',')[0].lstrip('-') == 'niveau' else '-gravite'
         return queryset.order_by(*(autres + [tri_niveau]))
+
+
+class AlertesParMachineView(APIView):
+    """Agrégation de lecture, toujours limitée par le scope d'alertes existant."""
+    permission_classes = [AlerteAccessPermission]
+
+    def get(self, request):
+        allowed = {'date_debut', 'date_fin', 'limit'}
+        if set(request.query_params) - allowed:
+            raise ValidationError({'detail': 'Paramètre de requête non autorisé.'})
+        try:
+            start = datetime.fromisoformat(request.query_params['date_debut'].replace('Z', '+00:00'))
+            end = datetime.fromisoformat(request.query_params['date_fin'].replace('Z', '+00:00'))
+            limit = int(request.query_params.get('limit', 20))
+        except (KeyError, TypeError, ValueError):
+            raise ValidationError({'detail': 'date_debut et date_fin ISO-8601 ainsi qu’un limit entier sont requis.'})
+        if timezone.is_naive(start) or timezone.is_naive(end) or start >= end:
+            raise ValidationError({'detail': 'La période doit être horodatée avec fuseau et date_debut < date_fin.'})
+        if end - start > timedelta(days=366):
+            raise ValidationError({'detail': 'La période ne peut pas dépasser 366 jours.'})
+        if not 1 <= limit <= 100:
+            raise ValidationError({'limit': 'La limite doit être comprise entre 1 et 100.'})
+
+        rows = scope_queryset_alerte(Alerte.objects.all(), request.user).filter(
+            date_declenchement__gte=start, date_declenchement__lt=end,
+        ).values(
+            'machine_id', 'machine__nom', 'machine__identifiant_interne',
+        ).annotate(total=Count('id')).order_by('-total', 'machine__nom', 'machine_id')
+        total_groups = rows.count()
+        results = list(rows[:limit])
+        return Response({
+            'results': [{
+                'machine_id': row['machine_id'],
+                'machine': row['machine__nom'],
+                'identifiant_interne': row['machine__identifiant_interne'],
+                'alert_count': row['total'],
+            } for row in results],
+            'count': total_groups,
+            'truncated': total_groups > limit,
+            'period': {'date_debut': start, 'date_fin': end},
+        })
 
 
 class AlerteViewSet(viewsets.ReadOnlyModelViewSet):

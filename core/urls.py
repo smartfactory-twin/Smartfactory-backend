@@ -15,6 +15,7 @@ from apps.equipements.ai_readiness_views import AiReadinessAPIView
 urlpatterns = [
     path('admin/', admin.site.urls),
     path('api/auth/', include('apps.accounts.urls')),
+    path('api/voice/', include('apps.voice.urls')),
     path('api/equipements/', include('apps.equipements.urls')),
     path('api/predictive-maintenance/', PredictiveMaintenanceAPIView.as_view(),
          name='predictive-maintenance'),

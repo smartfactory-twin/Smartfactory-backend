@@ -160,6 +160,17 @@ pytest apps/accounts/tests/test_auth.py
 | ADMIN | Administrateur — accès total |
 | TECHNICIEN | Technicien terrain |
 | OPERATEUR | Opérateur (par défaut à l'inscription) |
+
+## Assistant vocal — agent texte (phase 1)
+
+`POST /api/voice/agent/` nécessite un JWT et accepte `{ "message": "…", "conversation_id": "…" }`.
+La réponse contient `reply`, `conversation_id` et `tools_called`. La phase 1 n'expose que des outils de lecture ; `simulate_what_if` est un calcul sans persistance. Le RUL répond qu'il n'est pas disponible pour une machine SmartFactory.
+
+Les outils appellent les routes DRF existantes au nom du demandeur : leurs rôles et périmètres restent appliqués par ces API. Le JWT n'est pas transmis au fournisseur LLM. Les conversations expirent après 30 minutes et sont isolées par utilisateur ; le point d'accès est limité à 20 demandes par minute et par utilisateur.
+
+Configure dans `.env` les cinq variables suivantes pour un endpoint OpenAI-compatible : `LLM_PROVIDER`, `LLM_BASE_URL` (base URL se terminant par `/v1`, sans `/chat/completions`), `LLM_MODEL`, `LLM_API_KEY` et `LLM_TIMEOUT_SECONDS`. Pour `ollama` ou `local`, la clé peut être vide. En cas d'absence ou d'indisponibilité du fournisseur, l'API répond 503 ; le mode règles du frontend reste utilisable.
+
+La liste d'outils, leurs paramètres et limites se trouve dans `docs/voice_agent.md`.
 # Disponibilité des données pour l’IA
 
 `GET /api/ai/readiness/` (ADMIN et TECHNICIEN, restreint au périmètre UserScope)
