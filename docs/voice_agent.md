@@ -1,4 +1,4 @@
-# Assistant vocal — phase 1 (agent texte, lecture seule)
+# Assistant vocal SmartFactory Twin — backend (phases 1 à 3)
 
 ## Architecture et flux
 
@@ -43,7 +43,14 @@ Définir dans l'environnement (ou `.env`, jamais dans le code) :
 | `LLM_MODEL` | Identifiant du modèle |
 | `LLM_API_KEY` | Clé du fournisseur ; jamais incluse dans les erreurs ou journaux |
 | `LLM_TIMEOUT_SECONDS` | Timeout fournisseur positif, plafonné par le délai restant de la requête |
-| `LLM_USER_AGENT` | User-Agent HTTP optionnel ; valeur par défaut `SmartFactoryTwin/1.0` |
+| `LLM_USER_AGENT` | User-Agent HTTP utilisé par le LLM et la transcription ; valeur par défaut `SmartFactoryTwin/1.0` |
+| `TRANSCRIPTION_MODEL` | Modèle Groq, défaut `whisper-large-v3-turbo` |
+| `TRANSCRIPTION_LANGUAGE` | Langue ISO-639-1, défaut `fr` |
+| `TRANSCRIPTION_PROMPT` | Contexte lexical métier (le prompt Groq accepte au plus 224 tokens) |
+| `TRANSCRIPTION_API_KEY` | Clé dédiée facultative ; si vide, reprend `LLM_API_KEY` |
+| `TRANSCRIPTION_BASE_URL` | Base d’API facultative ; si vide, reprend `LLM_BASE_URL` |
+| `VOICE_MAX_AUDIO_BYTES` | Taille maximale reçue, défaut 20 MiB |
+| `VOICE_MAX_AUDIO_SECONDS` | Durée WAV maximale contrôlée, défaut 120 secondes |
 
 Le client appelle `{LLM_BASE_URL}/chat/completions` avec tool calling, température zéro et `max_tokens=700`. `.env.example` donne les emplacements sans valeur secrète.
 
@@ -55,9 +62,23 @@ La proposition expire après `VOICE_PROPOSAL_TTL_SECONDS` (120 s par défaut). U
 
 Une commande `python manage.py purge_voice_proposals --days 30` supprime les propositions anciennes non en attente ; les propositions pending expirées sont d'abord passées à `expired`.
 
+## Phase 3 : transcription vocale hébergée
+
+Flux : navigateur (phase 4) -> `POST /api/voice/transcribe/` avec un JWT et un fichier multipart `audio` -> validation MIME/taille/durée WAV, puis limite de débit `voice_transcribe` -> envoi multipart vers `POST {TRANSCRIPTION_BASE_URL}/audio/transcriptions` chez Groq -> réponse `{text, engine, model, language, processing_ms}`. L’endpoint renvoie uniquement le texte reconnu ; il ne l’envoie pas à l’agent et ne déclenche aucune proposition ou écriture.
+
+Le service utilise `TRANSCRIPTION_API_KEY` et `TRANSCRIPTION_BASE_URL` s’ils sont renseignés, sinon `LLM_API_KEY` et `LLM_BASE_URL`. Le `User-Agent` est celui de `LLM_USER_AGENT`. Le chemin et les champs multipart suivent la [documentation Groq Speech-to-Text](https://console.groq.com/docs/speech-to-text) : `file`, `model`, `language`, `prompt` et `response_format=json`. Le prompt de domaine reste inférieur à la limite documentée de 224 tokens. Le fournisseur reçoit l’audio uniquement pour traiter cette demande ; l’application ne l’enregistre pas en base ni dans son stockage média. Les uploads Django temporaires sont fermés dans un bloc `finally`. La durée peut être lue sans bibliothèque externe pour WAV ; elle n’est pas inspectée pour les autres formats.
+
+La transcription elle-même n’est pas stockée par ce endpoint. Si un client envoie ensuite son texte à `/api/voice/agent/`, le texte devient alors une demande d’agent et est conservé selon la politique actuelle : dans `VoiceAgentRequest.texte` et, pour les échanges de conversation conservés, dans `VoiceConversation.messages`. `VocalCommand` n’est pas utilisé par le nouvel endpoint.
+
+Formats admis : WebM, OGG, WAV, MP4/M4A et MPEG selon le type MIME déclaré. Taille par défaut : 20 MiB ; durée maximale WAV par défaut : 120 secondes. La limite de transcription est 5 requêtes/minute/utilisateur, contre 20/minute pour l’agent. Une erreur fournisseur renvoie 503 `transcription_unavailable` pour permettre au client de reprendre avec la reconnaissance navigateur.
+
+Les variables de cette phase sont dans `.env.example`. Le prompt Groq reste du contexte lexical et n’ordonne jamais d’action. Le champ audio n’est jamais écrit dans le journal vocal ; le texte reçu de Groq n’est pas journalisé non plus. Les erreurs fournisseur sont journalisées côté serveur avec type, code HTTP et corps borné/assaini, jamais la clé, l’audio ou la transcription.
+
 ## Limites connues
 
-- Phase texte uniquement : aucune transcription Whisper, interface ni synthèse vocale.
+- Le navigateur et l’interface n’intègrent pas encore cet endpoint (phase 4) ; aucune synthèse vocale serveur n’est ajoutée.
+- La durée est vérifiée uniquement pour WAV ; les autres formats ne sont pas décodés localement afin d’éviter une dépendance audio lourde.
+- Les réponses de transcription ne sont pas stockées et le backend ne transmet jamais automatiquement le texte transcrit à l’agent.
 - Le résultat statistique/benchmark et la disponibilité RUL ne deviennent pas des diagnostics industriels ; la RUL est explicitement indisponible pour les machines SmartFactory.
 - Le nettoyage des conversations expirées n'est pas planifié : les conversations expirées ne sont plus utilisables, mais restent stockées jusqu'à une politique de purge ultérieure.
 - La liste d'alertes d'un opérateur reste soumise aux permissions de lecture historiques ; l'assistant ne surélève pas les droits.

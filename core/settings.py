@@ -207,6 +207,7 @@ REST_FRAMEWORK = {
         'login': '5/min',
         'password_reset': '3/hour',
         'voice_agent': '20/min',
+        'voice_transcribe': '5/min',
     },
 }
 
@@ -219,6 +220,16 @@ LLM_TIMEOUT_SECONDS = config('LLM_TIMEOUT_SECONDS', default=20, cast=int)
 LLM_USER_AGENT = config('LLM_USER_AGENT', default='SmartFactoryTwin/1.0')
 VOICE_PROPOSAL_TTL_SECONDS = config('VOICE_PROPOSAL_TTL_SECONDS', default=120, cast=int)
 VOICE_PROPOSAL_HOURLY_LIMIT = config('VOICE_PROPOSAL_HOURLY_LIMIT', default=10, cast=int)
+TRANSCRIPTION_MODEL = config('TRANSCRIPTION_MODEL', default='whisper-large-v3-turbo')
+TRANSCRIPTION_LANGUAGE = config('TRANSCRIPTION_LANGUAGE', default='fr')
+TRANSCRIPTION_PROMPT = config(
+    'TRANSCRIPTION_PROMPT',
+    default='SmartFactory Twin : identifiants POMPE-002, AL-000004, OT; termes acquitter, ordre de travail, seuil et capteur.',
+)
+TRANSCRIPTION_API_KEY = config('TRANSCRIPTION_API_KEY', default='')
+TRANSCRIPTION_BASE_URL = config('TRANSCRIPTION_BASE_URL', default='')
+VOICE_MAX_AUDIO_BYTES = config('VOICE_MAX_AUDIO_BYTES', default=20 * 1024 * 1024, cast=int)
+VOICE_MAX_AUDIO_SECONDS = config('VOICE_MAX_AUDIO_SECONDS', default=120, cast=int)
 
 LOGGING = {
     'version': 1,
