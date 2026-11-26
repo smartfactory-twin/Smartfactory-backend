@@ -7,3 +7,7 @@ class VoiceAgentThrottle(ScopedRateThrottle):
 
 class VoiceTranscriptionThrottle(ScopedRateThrottle):
     scope = 'voice_transcribe'
+
+
+class VoiceSessionTranscriptionThrottle(ScopedRateThrottle):
+    scope = 'voice_session_transcribe'

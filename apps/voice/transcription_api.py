@@ -11,7 +11,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from .throttles import VoiceTranscriptionThrottle
+from .throttles import VoiceSessionTranscriptionThrottle, VoiceTranscriptionThrottle
 from .transcription import (
     TranscriptionConfigurationError,
     TranscriptionUnavailableError,
@@ -96,3 +96,16 @@ class VoiceTranscriptionAPIView(APIView):
         finally:
             # Django's temporary upload handler removes spooled files when closed.
             audio_file.close()
+
+
+class VoiceSessionTranscriptionAPIView(VoiceTranscriptionAPIView):
+    """Separate transcription quota reserved for realtime voice sessions."""
+    throttle_classes = [VoiceSessionTranscriptionThrottle]
+    throttle_scope = 'voice_session_transcribe'
+
+
+class VoiceSessionConfigAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        return Response({'max_seconds': settings.VOICE_SESSION_MAX_SECONDS})

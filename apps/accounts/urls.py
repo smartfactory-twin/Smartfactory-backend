@@ -1,6 +1,7 @@
 from django.urls import path
 from .views import (
     LoginView,
+    GoogleLoginView,
     LogoutView,
     CustomTokenRefreshView,
     RegisterView,
@@ -15,10 +16,12 @@ from .views import (
     ChangePasswordView,
     VocalCommandHistoryView,
     AuditLogListView,
+    AdminUserActivityView,
 )
 
 urlpatterns = [
     path('login/',                  LoginView.as_view(),              name='auth-login'),
+    path('google-login/',           GoogleLoginView.as_view(),         name='auth-google-login'),
     path('logout/',                 LogoutView.as_view(),             name='auth-logout'),
     path('token/refresh/',          CustomTokenRefreshView.as_view(), name='token-refresh'),
     path('register/',               RegisterView.as_view(),           name='auth-register'),
@@ -27,6 +30,7 @@ urlpatterns = [
     path('me/change-password/',     ChangePasswordView.as_view(),     name='auth-change-password'),
     path('vocal/commands/',         VocalCommandHistoryView.as_view(), name='vocal-command-history'),
     path('audit-logs/',             AuditLogListView.as_view(),         name='audit-log-list'),
+    path('users/<int:user_id>/activity/', AdminUserActivityView.as_view(), name='admin-user-activity'),
     path('password-reset/',         PasswordResetView.as_view(),      name='password-reset'),
     path('password-reset/confirm/', PasswordResetConfirmView.as_view(),name='password-reset-confirm'),
     path('users/',                  AdminUserCreateView.as_view(),    name='admin-create-user'),

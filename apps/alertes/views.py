@@ -22,8 +22,10 @@ Toutes les lectures sont filtrées côté backend par le périmètre `UserScope`
 """
 from datetime import datetime, timedelta
 
-from django.db.models import Case, Count, IntegerField, Value, When
+from django.db.models import Case, Count, IntegerField, Q, Value, When
+from django.db.models.functions import TruncDate
 from django.utils import timezone
+from django.utils.dateparse import parse_datetime
 from rest_framework import filters, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
@@ -151,6 +153,50 @@ class AlerteViewSet(viewsets.ReadOnlyModelViewSet):
 
     def get_serializer_class(self):
         return AlerteDetailSerializer if self.action == 'retrieve' else AlerteListSerializer
+
+    @action(detail=False, methods=['get'], url_path='tableau-de-bord')
+    def tableau_de_bord(self, request):
+        """Fournit en peu de requêtes les compteurs et la série du dashboard."""
+        base = scope_queryset_alerte(Alerte.objects.all(), request.user)
+        active = Q(statut=Alerte.Statut.ACTIVE)
+        totals = base.aggregate(
+            actives=Count('id', filter=active),
+            machines_en_alerte=Count('machine_id', filter=active, distinct=True),
+            critiques=Count('id', filter=active & Q(niveau=Alerte.Niveau.CRITIQUE)),
+        )
+        par_niveau = {
+            row['niveau']: row['total']
+            for row in base.values('niveau').annotate(total=Count('id'))
+        }
+
+        start_raw = request.query_params.get('date_declenchement__gte')
+        end_raw = request.query_params.get('date_declenchement__lte')
+        par_jour = []
+        if bool(start_raw) != bool(end_raw):
+            raise ValidationError('Les deux bornes de période sont requises.')
+        if start_raw and end_raw:
+            start = parse_datetime(start_raw)
+            end = parse_datetime(end_raw)
+            if start is None or end is None:
+                raise ValidationError('La période demandée est invalide.')
+            if timezone.is_naive(start):
+                start = timezone.make_aware(start)
+            if timezone.is_naive(end):
+                end = timezone.make_aware(end)
+            if start >= end:
+                raise ValidationError('La période demandée est invalide.')
+            if end - start > timedelta(days=8):
+                raise ValidationError('La période ne peut pas dépasser 8 jours.')
+            par_jour = [
+                {'date': row['jour'].isoformat(), 'total': row['total']}
+                for row in base.filter(
+                    date_declenchement__gte=start,
+                    date_declenchement__lte=end,
+                ).annotate(jour=TruncDate('date_declenchement'))
+                .values('jour').annotate(total=Count('id')).order_by('jour')
+            ]
+
+        return Response({**totals, 'par_niveau': par_niveau, 'par_jour': par_jour})
 
     # ── Acquittement (UC-29) ──────────────────────────────────────────────
     @action(detail=True, methods=['post'], url_path='acquitter')

@@ -3,7 +3,7 @@ import io
 import csv
 from rest_framework.test import APIClient
 from apps.accounts.models import Utilisateur
-from apps.equipements.models import Usine, Zone, LigneProduction, Machine, Composant
+from apps.equipements.models import Usine, Zone, LigneProduction, Machine, Composant, UserScope
 
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
@@ -114,6 +114,25 @@ class TestUsineAPI:
     def test_unauthenticated_forbidden(self, api_client):
         r = api_client.get('/api/equipements/usines/')
         assert r.status_code == 401
+
+
+@pytest.mark.django_db
+def test_machine_statistics_aggregate_statuses_and_keep_user_scope(api_client, admin_user, tech_user, machine):
+    other_machine = Machine.objects.create(
+        nom='Machine critique', identifiant_interne='MCH-CRITIQUE',
+        statut=Machine.Statut.CRITIQUE, ligne_production=machine.ligne_production,
+    )
+
+    api_client.force_authenticate(admin_user)
+    admin_response = api_client.get('/api/equipements/machines/statistiques/')
+    assert admin_response.status_code == 200
+    assert admin_response.data == {'total': 2, 'par_statut': {'NORMAL': 1, 'CRITIQUE': 1}}
+
+    UserScope.objects.create(utilisateur=tech_user, machine=machine)
+    api_client.force_authenticate(tech_user)
+    tech_response = api_client.get('/api/equipements/machines/statistiques/')
+    assert tech_response.status_code == 200
+    assert tech_response.data == {'total': 1, 'par_statut': {'NORMAL': 1}}
 
 
 # ── Tests Zone ────────────────────────────────────────────────────────────────
@@ -304,6 +323,21 @@ class TestMachineAPI:
         assert r.status_code == 200
         assert 'count' in r.data
         assert 'results' in r.data
+
+    def test_pagination_page_size_and_page_contents(self, api_client, admin_user, machine, ligne):
+        second = Machine.objects.create(
+            nom='Machine Test B', identifiant_interne='MCH-002',
+            statut='NORMAL', ligne_production=ligne,
+        )
+        api_client.force_authenticate(admin_user)
+        first_page = api_client.get('/api/equipements/machines/?page=1&page_size=1')
+        second_page = api_client.get('/api/equipements/machines/?page=2&page_size=1')
+
+        assert first_page.status_code == second_page.status_code == 200
+        assert first_page.data['count'] == second_page.data['count'] == 2
+        assert len(first_page.data['results']) == len(second_page.data['results']) == 1
+        assert first_page.data['results'][0]['id'] != second_page.data['results'][0]['id']
+        assert {first_page.data['results'][0]['id'], second_page.data['results'][0]['id']} == {machine.id, second.id}
 
     def test_unauthenticated_forbidden(self, api_client):
         r = api_client.get('/api/equipements/machines/')

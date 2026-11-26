@@ -12,13 +12,16 @@ from django.contrib.auth.tokens import default_token_generator
 from django.utils.http import urlsafe_base64_encode, urlsafe_base64_decode
 from django.utils.encoding import force_bytes, force_str
 from django.conf import settings
-from django.db import transaction
+from django.db import transaction, IntegrityError
+from django.db.models import Q
+from django.utils import timezone
 import logging
 import secrets
 import string
 
 from .serializers import (
     CustomTokenObtainPairSerializer,
+    GoogleLoginSerializer,
     RegisterSerializer,
     UserSerializer,
     PasswordResetSerializer,
@@ -81,6 +84,13 @@ class AuditLogListView(APIView):
                             status=status.HTTP_400_BAD_REQUEST)
 
         queryset = AuditLog.objects.select_related('acteur').all()
+        acteur_id = request.query_params.get('acteur_id')
+        if acteur_id:
+            try:
+                queryset = queryset.filter(acteur_id=int(acteur_id))
+            except (TypeError, ValueError):
+                return Response({'acteur_id': ['Utilisez un identifiant entier.']},
+                                status=status.HTTP_400_BAD_REQUEST)
         before_id = request.query_params.get('before_id')
         if before_id:
             try:
@@ -93,6 +103,82 @@ class AuditLogListView(APIView):
             'count': queryset.count(),
             'results': AuditLogSerializer(rows, many=True).data,
             'next_before_id': rows[-1].pk if len(rows) == limit else None,
+        })
+
+
+class AdminUserActivityView(APIView):
+    """Combine audit events with durable alert acknowledgements and work orders."""
+    permission_classes = [IsAdmin]
+
+    def get(self, request, user_id):
+        user = User.objects.filter(pk=user_id).first()
+        if user is None:
+            return Response({'detail': 'Utilisateur introuvable.'}, status=status.HTTP_404_NOT_FOUND)
+
+        from apps.alertes.models import Alerte
+        from apps.equipements.models import OrdreTravail
+
+        limit = 200
+        audit_queryset = AuditLog.objects.filter(acteur_id=user_id).exclude(
+            chemin__contains='/acquitter/',
+        ).exclude(
+            action__icontains='acknowledge_alert',
+        ).exclude(
+            Q(details__has_key='outil')
+            & Q(details__outil__in=['acknowledge_alert', 'create_work_order']),
+        ).exclude(
+            methode='POST', chemin='/api/equipements/ordres-travail/',
+        ).order_by('-cree_le', '-pk')
+        audit_count = audit_queryset.count()
+        audit_rows = audit_queryset[:limit]
+        events = []
+        for row in audit_rows:
+            # Business actions below use durable records and friendly labels.
+            serialized = AuditLogSerializer(row).data
+            events.append({**serialized, 'event_type': 'audit'})
+
+        acknowledgement_queryset = Alerte.objects.filter(
+            acquittee_par_id=user_id, date_acquittement__isnull=False,
+        )
+        acknowledgement_count = acknowledgement_queryset.count()
+        acknowledgements = acknowledgement_queryset.select_related('machine', 'capteur').order_by('-date_acquittement', '-pk')[:limit]
+        for alert in acknowledgements:
+            events.append({
+                'id': f'alert-ack-{alert.pk}',
+                'cree_le': alert.date_acquittement.isoformat(),
+                'action': 'Alerte acquittée',
+                'action_label': 'Alerte acquittée',
+                'description': ' · '.join(filter(None, [
+                    alert.reference or f'AL-{alert.pk:06d}',
+                    alert.machine.nom if alert.machine_id else '',
+                    alert.capteur.identifiant if alert.capteur_id else '',
+                ])),
+                'code_http': 200,
+                'event_type': 'alert_acknowledgement',
+            })
+
+        work_order_queryset = OrdreTravail.objects.filter(cree_par_id=user_id)
+        work_order_count = work_order_queryset.count()
+        work_orders = work_order_queryset.select_related('machine').order_by('-created_at', '-pk')[:limit]
+        for order in work_orders:
+            events.append({
+                'id': f'work-order-{order.pk}',
+                'cree_le': order.created_at.isoformat(),
+                'action': 'Ordre de travail créé',
+                'action_label': 'Ordre de travail créé',
+                'description': ' · '.join(filter(None, [
+                    f'OT-{order.pk}', order.titre,
+                    order.machine.nom if order.machine_id else '',
+                ])),
+                'code_http': 201,
+                'event_type': 'work_order_created',
+            })
+
+        events.sort(key=lambda event: (event['cree_le'], str(event['id'])), reverse=True)
+        return Response({
+            'count': audit_count + acknowledgement_count + work_order_count,
+            'results': events[:limit],
+            'truncated': audit_count + acknowledgement_count + work_order_count > limit,
         })
 
 
@@ -236,6 +322,94 @@ class LoginView(TokenObtainPairView):
                 status=status.HTTP_401_UNAUTHORIZED
             )
         return Response(serializer.validated_data, status=status.HTTP_200_OK)
+
+
+class GoogleLoginView(APIView):
+    """Connexion Google pour les comptes SmartFactory existants uniquement."""
+
+    permission_classes = [AllowAny]
+    throttle_classes = [LoginThrottle]
+
+    def post(self, request):
+        if not settings.GOOGLE_OAUTH_CLIENT_ID:
+            return Response(
+                {'error': 'La connexion Google n’est pas configurée sur le serveur.'},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+
+        serializer = GoogleLoginSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        try:
+            from google.auth.exceptions import TransportError
+            from google.auth.transport.requests import Request as GoogleRequest
+            from google.oauth2 import id_token
+
+            claims = id_token.verify_oauth2_token(
+                serializer.validated_data['credential'],
+                GoogleRequest(),
+                settings.GOOGLE_OAUTH_CLIENT_ID,
+            )
+        except ValueError:
+            return Response({'error': 'Le jeton Google est invalide ou expiré.'}, status=status.HTTP_401_UNAUTHORIZED)
+        except TransportError as exc:
+            logger.warning('Vérification Google indisponible (%s).', type(exc).__name__)
+            return Response({'error': 'La vérification Google est temporairement indisponible.'}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+        except Exception as exc:  # Fail closed; do not expose token or provider details.
+            logger.warning('Échec de vérification Google (%s).', type(exc).__name__)
+            return Response({'error': 'Impossible de vérifier la connexion Google.'}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+
+        subject = claims.get('sub')
+        email = (claims.get('email') or '').strip().lower()
+        email_verified = claims.get('email_verified') is True
+        hosted_domain = claims.get('hd')
+        is_authoritative_email = email.endswith('@gmail.com') or bool(hosted_domain)
+        if not subject or not email or not email_verified or not is_authoritative_email:
+            return Response(
+                {'error': 'Google doit fournir un e-mail vérifié Gmail ou Google Workspace.'},
+                status=status.HTTP_401_UNAUTHORIZED,
+            )
+
+        try:
+            with transaction.atomic():
+                user = User.objects.select_for_update().filter(google_sub=subject).first()
+                if user is None:
+                    user = User.objects.select_for_update().filter(email=email).first()
+                if user is None:
+                    return Response(
+                        {'error': 'Aucun compte SmartFactory actif ne correspond à cet e-mail. Contactez un administrateur.'},
+                        status=status.HTTP_403_FORBIDDEN,
+                    )
+                if not user.actif:
+                    return Response({'error': 'Ce compte est inactif. Contactez un administrateur.'}, status=status.HTTP_403_FORBIDDEN)
+                if user.must_reset_password:
+                    return Response({'error': 'Terminez d’abord la première connexion avec votre mot de passe temporaire.'}, status=status.HTTP_403_FORBIDDEN)
+                if user.google_sub and user.google_sub != subject:
+                    return Response({'error': 'Cet e-mail est déjà associé à une autre identité Google.'}, status=status.HTTP_403_FORBIDDEN)
+
+                if user.google_sub != subject:
+                    user.google_sub = subject
+                    user.last_login = timezone.now()
+                    user.save(update_fields=['google_sub', 'last_login'])
+                else:
+                    user.last_login = timezone.now()
+                    user.save(update_fields=['last_login'])
+
+                refresh = CustomTokenObtainPairSerializer.get_token(user)
+                return Response({
+                    'refresh': str(refresh),
+                    'access': str(refresh.access_token),
+                    'user': {
+                        'id': user.id,
+                        'nom': user.nom,
+                        'prenom': user.prenom,
+                        'email': user.email,
+                        'role': user.role,
+                        'role_label': user.get_role_display(),
+                    },
+                }, status=status.HTTP_200_OK)
+        except IntegrityError:
+            return Response({'error': 'Cette identité Google est déjà associée à un autre compte.'}, status=status.HTTP_403_FORBIDDEN)
 
 
 

@@ -182,6 +182,7 @@ CORS_ALLOWED_ORIGINS = config(
 CORS_ALLOW_CREDENTIALS = True
 
 # ─── Django REST Framework ────────────────────────────────────────────────────
+VOICE_TRANSCRIBE_RATE = config('VOICE_TRANSCRIBE_RATE', default='30/min')
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': (
         'rest_framework_simplejwt.authentication.JWTAuthentication',
@@ -208,6 +209,7 @@ REST_FRAMEWORK = {
         'password_reset': '3/hour',
         'voice_agent': '20/min',
         'voice_transcribe': '5/min',
+        'voice_session_transcribe': VOICE_TRANSCRIBE_RATE,
     },
 }
 
@@ -230,6 +232,7 @@ TRANSCRIPTION_API_KEY = config('TRANSCRIPTION_API_KEY', default='')
 TRANSCRIPTION_BASE_URL = config('TRANSCRIPTION_BASE_URL', default='')
 VOICE_MAX_AUDIO_BYTES = config('VOICE_MAX_AUDIO_BYTES', default=20 * 1024 * 1024, cast=int)
 VOICE_MAX_AUDIO_SECONDS = config('VOICE_MAX_AUDIO_SECONDS', default=120, cast=int)
+VOICE_SESSION_MAX_SECONDS = config('VOICE_SESSION_MAX_SECONDS', default=300, cast=int)
 
 LOGGING = {
     'version': 1,
@@ -297,6 +300,7 @@ DEFAULT_FROM_EMAIL = formataddr((EMAIL_DISPLAY_NAME, config('DEFAULT_FROM_EMAIL'
 
 # ─── Frontend URL (liens de réinitialisation) ─────────────────────────────────
 FRONTEND_URL = config('FRONTEND_URL', default='http://localhost:3000')
+GOOGLE_OAUTH_CLIENT_ID = config('GOOGLE_OAUTH_CLIENT_ID', default='')
 
 # ─── Logo base64 pour les emails ─────────────────────────────────────────────
 import base64 as _b64, os as _os
