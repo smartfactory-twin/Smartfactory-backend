@@ -163,12 +163,7 @@ class UltralyticsVisionAIService(VisionAIService):
 
 
 class MockVisionAIService(VisionAIService):
-    """Service de démonstration déterministe (aucun vrai modèle IA).
 
-    Le résultat est dérivé de l'empreinte SHA-256 des octets de l'image : une
-    même image produit toujours le même résultat, ce qui permet de tester tout
-    le workflow sans dépendre d'un modèle externe.
-    """
 
     name = 'mock'
 

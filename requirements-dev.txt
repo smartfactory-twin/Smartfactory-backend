@@ -7,3 +7,4 @@ ruff>=0.14,<1
 bandit==1.9.4
 pip-audit==2.10.1
 locust>=2.32,<3
+websocket-client>=1.8,<2

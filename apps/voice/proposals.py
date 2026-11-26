@@ -1,4 +1,4 @@
-"""Validation and lifecycle for server-confirmed voice write proposals."""
+
 import hashlib
 import json
 import time
@@ -16,6 +16,7 @@ from apps.equipements.serializers import OrdreTravailSerializer, RapportInterven
 
 from .models import VoiceActionProposal
 from .tools import _call_api
+from .speech import make_spoken_summary
 
 
 WRITE_TOOLS = {
@@ -72,7 +73,7 @@ def validate_and_preview(request, tool, parameters):
         params = {'commentaire': comment}
         summary = f"Je vais acquitter l’alerte {alert.get('reference') or alert['id']} avec le commentaire {comment}."
         preview = {'alerte': alert.get('reference') or alert['id'], 'commentaire': comment}
-        return params, summary[:250], summary[:250], preview, f"/api/alertes/{alert['id']}/acquitter/", 'POST'
+        return params, summary[:250], make_spoken_summary(summary), preview, f"/api/alertes/{alert['id']}/acquitter/", 'POST'
 
     if tool == 'create_work_order':
         if role not in {'ADMIN', 'TECHNICIEN'}:
@@ -92,7 +93,7 @@ def validate_and_preview(request, tool, parameters):
         serializer.is_valid(raise_exception=True)
         summary = f"Je vais créer un ordre de travail {parameters['type']} pour {machine.nom} : {title}."
         preview = {'machine': machine_data.get('nom'), **business_params}
-        return business_params, summary[:250], summary[:250], preview, '/api/equipements/ordres-travail/', 'POST'
+        return business_params, summary[:250], make_spoken_summary(summary), preview, '/api/equipements/ordres-travail/', 'POST'
 
     if tool == 'update_work_order_status':
         if role not in {'ADMIN', 'TECHNICIEN'}:
@@ -111,7 +112,7 @@ def validate_and_preview(request, tool, parameters):
         summary = f"Je vais faire passer l’ordre de travail {order_id} de {order.statut} à {next_status}."
         preview = {'ordre': order_id, 'machine': order_data.get('machine_nom'),
                    'statut_actuel': order.statut, 'statut_proposé': next_status}
-        return business_params, summary[:250], summary[:250], preview, f'/api/equipements/ordres-travail/{order_id}/', 'PATCH'
+        return business_params, summary[:250], make_spoken_summary(summary), preview, f'/api/equipements/ordres-travail/{order_id}/', 'PATCH'
 
     if tool == 'submit_work_order_report':
         if role not in {'ADMIN', 'TECHNICIEN'}:
@@ -132,7 +133,7 @@ def validate_and_preview(request, tool, parameters):
         serializer.is_valid(raise_exception=True)
         summary = f"Je vais déposer le rapport de l’ordre de travail {order_id}, signé par {business_params['signataire']}."
         preview = {'ordre': order_id, **business_params}
-        return business_params, summary[:250], summary[:250], preview, f'/api/equipements/ordres-travail/{order_id}/rapport/', 'POST'
+        return business_params, summary[:250], make_spoken_summary(summary), preview, f'/api/equipements/ordres-travail/{order_id}/rapport/', 'POST'
     raise ProposalError('Outil d’écriture inconnu.')
 
 

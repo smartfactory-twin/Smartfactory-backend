@@ -186,6 +186,9 @@ class Alerte(models.Model):
             'acquittee_par', 'commentaire_acquittement', 'date_acquittement',
             'statut', 'updated_at',
         ])
+        # Once acknowledged, the alert stays in the alert history but leaves
+        # every user's actionable notification list (manual and voice paths).
+        Notification.objects.filter(alerte=self).delete()
 
     def resoudre(self, motif=''):
         """Clôture de l'alerte (retour à la normale ou action manuelle)."""

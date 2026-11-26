@@ -2,7 +2,7 @@ import csv
 import io
 from django.utils.dateparse import parse_date
 from django.utils import timezone
-from django.db.models import OuterRef, Subquery
+from django.db.models import Count, OuterRef, Subquery
 from rest_framework import viewsets, status
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.decorators import action
@@ -160,6 +160,19 @@ class MachineViewSet(viewsets.ModelViewSet):
         if self.action in ('create', 'update', 'partial_update'):
             return MachineCreateUpdateSerializer
         return MachineDetailSerializer
+
+    @action(detail=False, methods=['get'], url_path='statistiques')
+    def statistiques(self, request):
+        """Compte les machines par statut sans sérialiser toute la liste."""
+        machines = scope_queryset_machine(Machine.objects.all(), request.user)
+        counts = {
+            row['statut']: row['total']
+            for row in machines.values('statut').annotate(total=Count('id'))
+        }
+        return Response({
+            'total': sum(counts.values()),
+            'par_statut': counts,
+        })
 
     # ── Composants inline ─────────────────────────────────────────────────────
 
@@ -671,6 +684,45 @@ class OrdreTravailViewSet(viewsets.ModelViewSet):
         if getattr(self.request.user, 'role', None) == 'ADMIN':
             return qs
         return qs.filter(machine_id__in=accessible_machine_ids(self.request.user))
+
+    @action(detail=False, methods=['get'], url_path='assignables')
+    def assignables(self, request):
+        """Return active technicians who can access the selected machine."""
+        if getattr(request.user, 'role', None) not in {'ADMIN', 'TECHNICIEN'}:
+            return Response({'detail': 'Votre rôle ne permet pas cette action.'}, status=status.HTTP_403_FORBIDDEN)
+        try:
+            machine_id = int(request.query_params.get('machine_id', ''))
+        except (TypeError, ValueError):
+            return Response({'machine_id': ['Sélectionnez une machine valide.']}, status=status.HTTP_400_BAD_REQUEST)
+
+        machine = Machine.objects.select_related('ligne_production__zone__usine').filter(pk=machine_id).first()
+        if machine is None:
+            return Response({'detail': 'Machine introuvable.'}, status=status.HTTP_404_NOT_FOUND)
+        if request.user.role != 'ADMIN' and machine.pk not in set(accessible_machine_ids(request.user)):
+            return Response({'detail': 'Machine introuvable.'}, status=status.HTTP_404_NOT_FOUND)
+
+        from django.contrib.auth import get_user_model
+        from django.db.models import Q
+        from django.utils import timezone
+        from .models import UserScope
+
+        now = timezone.now()
+        scope_query = Q(machine_id=machine.pk)
+        if machine.ligne_production_id:
+            scope_query |= Q(ligne_id=machine.ligne_production_id)
+            scope_query |= Q(zone_id=machine.ligne_production.zone_id)
+            scope_query |= Q(usine_id=machine.ligne_production.zone.usine_id)
+        scopes = UserScope.objects.filter(scope_query, actif=True).filter(
+            Q(date_debut__isnull=True) | Q(date_debut__lte=now),
+            Q(date_fin__isnull=True) | Q(date_fin__gt=now),
+        )
+        users = get_user_model().objects.filter(
+            role='TECHNICIEN', actif=True, scopes__in=scopes,
+        ).distinct().order_by('prenom', 'nom', 'id')
+        return Response({'results': [
+            {'id': user.pk, 'name': f'{user.prenom} {user.nom}'.strip() or user.email}
+            for user in users
+        ]})
 
     def perform_create(self, serializer):
         machine = serializer.validated_data['machine']

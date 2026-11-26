@@ -7,6 +7,7 @@ from datetime import timedelta
 
 from django.conf import settings
 from django.db import transaction
+from django.http import StreamingHttpResponse
 from django.utils import timezone
 from rest_framework import serializers, status
 from rest_framework.permissions import IsAuthenticated
@@ -16,9 +17,57 @@ from rest_framework.views import APIView
 from .llm import LLMConfigurationError, LLMUnavailableError, get_llm_client
 from .models import VoiceActionProposal, VoiceAgentRequest, VoiceConversation
 from .throttles import VoiceAgentThrottle
+from .speech import normalize_speech, split_speech_sentences
 from .tools import LLM_TOOLS, ToolCallError, execute_tool, summarize_tool_result
 
 logger = logging.getLogger(__name__)
+
+def _safe_interpreter_fallback(request, user_message, conversation, log):
+    """Use only scoped, read-only application APIs when the LLM is unavailable."""
+    try:
+        from .interpreter import CommandInterpreter
+        from .speech import normalize_speech
+
+        result = CommandInterpreter(user=request.user, request=request, conversation=conversation).process(user_message)
+        reply = str(result.get('response_text') or '').strip()
+        if not reply:
+            reply = 'Le mode local n’a pas pu traiter cette demande. Réessayez plus tard.'
+        if conversation is not None:
+            previous = list(conversation.messages or [])
+            conversation.messages = [
+                *previous,
+                {'role': 'user', 'content': redact(user_message)},
+                {'role': 'assistant', 'content': redact(reply)},
+            ][-MAX_HISTORY_MESSAGES:]
+            conversation.expires_at = timezone.now() + timezone.timedelta(seconds=CONVERSATION_TTL_SECONDS)
+            conversation.save(update_fields=['messages', 'expires_at', 'updated_at'])
+        log.outils_appeles = [
+            {'name': name, 'parameters': {}, 'result_summary': 'local read-only fallback'}
+            for name in result.get('tools_called', [])
+        ]
+        log.resume_resultat = redact(reply, 4000)
+        log.statut = VoiceAgentRequest.Status.SUCCESS
+        return Response({
+            'conversation_id': str(conversation.pk) if conversation else None,
+            'reply': reply,
+            'speech': normalize_speech(reply),
+            'tools_called': result.get('tools_called', []),
+            'proposal': None,
+            'display_data': result.get('display_data'),
+            'download': result.get('download'),
+            'fallback': True,
+        })
+    except Exception as exc:
+        logger.warning('Local voice fallback failed exception_type=%s', type(exc).__name__)
+        reply = ('Le service IA est indisponible et le mode local ne peut pas lire les données pour le moment. '
+                 'Aucune action n’a été exécutée. Réessayez plus tard.')
+        log.resume_resultat = reply
+        log.statut = VoiceAgentRequest.Status.SUCCESS
+        return Response({
+            'conversation_id': str(conversation.pk) if conversation else None,
+            'reply': reply, 'speech': reply, 'tools_called': [], 'proposal': None,
+            'fallback': True,
+        })
 
 MAX_INPUT_CHARS = 2000
 MAX_HISTORY_MESSAGES = 12
@@ -90,6 +139,7 @@ class VoiceAgentAPIView(APIView):
         )
         tool_log = []
         proposals_created = []
+        conversation = None
         try:
             conversation, _ = self._conversation(request.user, requested_conversation)
             log.conversation_id = conversation.pk
@@ -112,6 +162,10 @@ class VoiceAgentAPIView(APIView):
                 log.statut = VoiceAgentRequest.Status.SUCCESS
                 return Response({'conversation_id': str(conversation.pk), 'reply': reply,
                                  'tools_called': [], 'proposal': None})
+            from .interpreter import CommandInterpreter
+            if (CommandInterpreter.is_export_request(clean_text)
+                    or CommandInterpreter.is_machine_list_request(clean_text)):
+                return _safe_interpreter_fallback(request, clean_text, conversation, log)
             previous = list(conversation.messages or [])
             messages = [{'role': 'system', 'content': SYSTEM_PROMPT}, *previous,
                         {'role': 'user', 'content': clean_text}]
@@ -212,29 +266,25 @@ class VoiceAgentAPIView(APIView):
             return Response({
                 'conversation_id': str(conversation.pk),
                 'reply': final_text,
+                'speech': normalize_speech(final_text),
                 'tools_called': [entry['name'] for entry in tool_log],
                 'proposal': self._proposal_payload(proposals_created[-1]) if proposals_created else None,
             })
         except ToolCallError as exc:
-            log.outils_appeles = tool_log
             log.erreur = exc.code[:120]
-            return Response({'detail': str(exc)}, status=status.HTTP_502_BAD_GATEWAY)
+            logger.warning('Voice tool rejected; using local fallback code=%s', exc.code[:80])
+            return _safe_interpreter_fallback(request, clean_text, conversation, log)
         except (LLMConfigurationError, LLMUnavailableError) as exc:
-            log.outils_appeles = tool_log
             log.erreur = 'llm_unavailable'
-            logger.warning('Voice agent unavailable exception_type=%s', type(exc).__name__)
-            return Response({
-                'detail': str(exc),
-                'fallback': 'Le mode règles actuel reste utilisable côté frontend.',
-            }, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+            logger.warning('Voice provider unavailable; using local fallback exception_type=%s', type(exc).__name__)
+            return _safe_interpreter_fallback(request, clean_text, conversation, log)
         except ConversationError as exc:
             log.erreur = exc.code
             return Response({'detail': str(exc)}, status=exc.status_code)
         except Exception as exc:
-            log.outils_appeles = tool_log
             log.erreur = 'internal_error'
-            logger.warning('Voice agent failed exception_type=%s', type(exc).__name__)
-            return Response({'detail': 'Erreur interne de l’assistant vocal.'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            logger.warning('Voice agent failed; using local fallback exception_type=%s', type(exc).__name__)
+            return _safe_interpreter_fallback(request, clean_text, conversation, log)
         finally:
             log.duree_ms = max(0, int((time.monotonic() - started) * 1000))
             log.save(update_fields=['conversation_id', 'outils_appeles', 'resume_resultat',
@@ -264,6 +314,50 @@ class VoiceAgentAPIView(APIView):
             'expires_at': proposal.expires_at.isoformat(), 'status': proposal.statut,
         }
 
+class VoiceAgentStreamAPIView(APIView):
+    """SSE compatible avec le parcours agent existant ; aucune écriture directe."""
+    permission_classes = [IsAuthenticated]
+    throttle_classes = [VoiceAgentThrottle]
+    throttle_scope = 'voice_agent'
+
+    @staticmethod
+    def _event(name, payload):
+        import json
+        return f'event: {name}\ndata: {json.dumps(payload, ensure_ascii=False, separators=(",", ":"))}\n\n'
+
+    def post(self, request):
+        try:
+            response = VoiceAgentAPIView().post(request)
+            data = getattr(response, 'data', {}) or {}
+            if response.status_code >= 400:
+                code = data.get('code') or data.get('detail') or 'request_failed'
+                code = str(code).split(':', 1)[0][:80]
+                events = [self._event('error', {'code': code})]
+            else:
+                events = [self._event('tool', {'name': name}) for name in data.get('tools_called', [])]
+                reply = str(data.get('reply') or '')
+                for sentence in split_speech_sentences(reply):
+                    events.append(self._event('sentence', {'speech': normalize_speech(sentence)}))
+                if data.get('proposal'):
+                    events.append(self._event('proposal', data['proposal']))
+                if data.get('download'):
+                    events.append(self._event('download', data['download']))
+                events.append(self._event('done', {
+                    'conversation_id': data.get('conversation_id'),
+                    'reply': reply,
+                    'tools_called': data.get('tools_called', []),
+                    'proposal': data.get('proposal'),
+                    'display_data': data.get('display_data'),
+                    'download': data.get('download'),
+                    'fallback': bool(data.get('fallback')),
+                }))
+        except Exception as exc:
+            logger.warning('Voice stream failed exception_type=%s', type(exc).__name__)
+            events = [self._event('error', {'code': 'voice_stream_failed'})]
+        response = StreamingHttpResponse(events, content_type='text/event-stream; charset=utf-8')
+        response['Cache-Control'] = 'no-cache, no-transform'
+        response['X-Accel-Buffering'] = 'no'
+        return response
 
 class ConversationError(Exception):
     def __init__(self, code, message, status_code):
@@ -329,4 +423,10 @@ class ProposalActionAPIView(APIView):
             write_audit_event(request, proposal, method, path, 200, _redact_json(result),
                               int((time.monotonic() - started) * 1000))
             return Response({'proposal': VoiceAgentAPIView._proposal_payload(proposal), 'result': result})
+
+
+
+
+
+
 

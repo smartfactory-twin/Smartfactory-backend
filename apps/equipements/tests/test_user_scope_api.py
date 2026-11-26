@@ -228,6 +228,31 @@ class TestLecturePerimetre:
 
 @pytest.mark.django_db
 class TestMonPerimetre:
+    @pytest.mark.parametrize('role_fixture', ['operateur', 'technicien'])
+    def test_mon_perimetre_et_machines_sont_isoles_par_utilisateur(
+        self, request, api_client, hier, role_fixture,
+    ):
+        first_user = request.getfixturevalue(role_fixture)
+        second_user = Utilisateur.objects.create_user(
+            email=f'autre-{role_fixture}@sf.tn', password='Other@123!',
+            role=first_user.role, nom='Autre', prenom='Utilisateur',
+        )
+        UserScope.objects.create(utilisateur=first_user, ligne=hier['ligne_a'])
+        UserScope.objects.create(utilisateur=second_user, ligne=hier['ligne_b'])
+
+        api_client.force_authenticate(first_user)
+        first_scope = api_client.get(MON_PERIMETRE)
+        first_machines = api_client.get('/api/equipements/machines/')
+        api_client.force_authenticate(second_user)
+        second_scope = api_client.get(MON_PERIMETRE)
+        second_machines = api_client.get('/api/equipements/machines/')
+
+        assert first_scope.status_code == second_scope.status_code == 200
+        assert {m['identifiant_interne'] for m in first_scope.data['machines']} == {'CNC-A1', 'CNC-A2'}
+        assert {m['identifiant_interne'] for m in first_machines.data['results']} == {'CNC-A1', 'CNC-A2'}
+        assert {m['identifiant_interne'] for m in second_scope.data['machines']} == {'PRS-B1'}
+        assert {m['identifiant_interne'] for m in second_machines.data['results']} == {'PRS-B1'}
+
     def test_12_opérateur_ligne_unique(self, api_client, operateur, hier):
         UserScope.objects.create(utilisateur=operateur, ligne=hier['ligne_a'])
         api_client.force_authenticate(operateur)

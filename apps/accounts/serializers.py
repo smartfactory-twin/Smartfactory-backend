@@ -129,6 +129,12 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
         return token
 
 
+class GoogleLoginSerializer(serializers.Serializer):
+    """Reçoit le jeton d'identité Google sans jamais le journaliser."""
+
+    credential = serializers.CharField(write_only=True, trim_whitespace=True, max_length=8192)
+
+
 class PasswordResetSerializer(serializers.Serializer):
     """Demande de réinitialisation de mot de passe."""
 

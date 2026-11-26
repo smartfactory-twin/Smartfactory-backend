@@ -33,6 +33,7 @@ class VoiceAgentRequest(models.Model):
     outils_appeles = models.JSONField(default=list, blank=True)
     resume_resultat = models.CharField(max_length=4000, blank=True, default='')
     duree_ms = models.PositiveIntegerField(default=0)
+    premiere_phrase_ms = models.PositiveIntegerField(null=True, blank=True)
     statut = models.CharField(max_length=12, choices=Status.choices)
     erreur = models.CharField(max_length=120, blank=True, default='')
     created_at = models.DateTimeField(auto_now_add=True, db_index=True)

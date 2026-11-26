@@ -1,0 +1,2 @@
+Method,Name,Error,Occurrences,First Seen,Last Seen
+POST,POST /api/auth/login/,HTTPError('429 Client Error: Unknown Status for url: POST /api/auth/login/'),34,2026-11-25T16:57:01Z,2026-11-25T16:57:04Z

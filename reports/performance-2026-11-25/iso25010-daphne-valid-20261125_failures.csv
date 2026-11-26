@@ -1,0 +1,5 @@
+Method,Name,Error,Occurrences,First Seen,Last Seen
+GET,GET profil,"ConnectionAbortedError(10053, 'An established connection was aborted by the software in your host machine', None, 10053, None)",1,2026-11-25T17:03:51Z,2026-11-25T17:03:51Z
+GET,GET alertes,"ConnectionAbortedError(10053, 'An established connection was aborted by the software in your host machine', None, 10053, None)",3,2026-11-25T17:03:51Z,2026-11-25T17:03:51Z
+GET,GET machines,"ConnectionAbortedError(10053, 'An established connection was aborted by the software in your host machine', None, 10053, None)",6,2026-11-25T17:03:51Z,2026-11-25T17:03:51Z
+GET,GET capteurs,"ConnectionAbortedError(10053, 'An established connection was aborted by the software in your host machine', None, 10053, None)",4,2026-11-25T17:03:51Z,2026-11-25T17:03:51Z

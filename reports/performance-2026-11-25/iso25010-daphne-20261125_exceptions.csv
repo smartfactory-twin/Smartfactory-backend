@@ -1,0 +1,6 @@
+Count,Message,Traceback,Nodes
+34,Connexion Locust refusée (429).,"  File ""C:\Users\lenovo\Desktop\portfolio\SmartFactory-Twin\Smartfactory-backend\venv\Lib\site-packages\locust\user\users.py"", line 166, in run
+    self.on_start()
+  File ""C:\Users\lenovo\Desktop\portfolio\SmartFactory-Twin\Smartfactory-backend\tests\performance\locustfile.py"", line 29, in on_start
+    raise RuntimeError(f'Connexion Locust refusée ({response.status_code}).')
+",local
