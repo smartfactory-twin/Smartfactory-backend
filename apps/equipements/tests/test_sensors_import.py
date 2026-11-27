@@ -276,6 +276,34 @@ class TestSensorImportRejections:
         api_client.post(IMPORT_URL, {'file': f}, format='multipart')
         assert Machine.objects.count() == before
 
+    @pytest.mark.django_db(transaction=True)
+    def test_import_rolls_back_all_rows_after_mid_transaction_error_and_recovers(
+        self, api_client, admin_user, machines, monkeypatch
+    ):
+        api_client.force_authenticate(admin_user)
+        api_client.raise_request_exception = False
+        csv_rows = [row('TEMP-ATOMIC-101', 'CNC-101'), row('TEMP-ATOMIC-102', 'CNC-102')]
+        original_create = Sensor.objects.create
+        calls = 0
+
+        def fail_second_insert(*args, **kwargs):
+            nonlocal calls
+            calls += 1
+            if calls == 2:
+                raise RuntimeError('injected transaction failure')
+            return original_create(*args, **kwargs)
+
+        monkeypatch.setattr(Sensor.objects, 'create', fail_second_insert)
+        failed = api_client.post(IMPORT_URL, {'file': make_sensors_csv(csv_rows)}, format='multipart')
+        assert failed.status_code == 400
+        assert Sensor.objects.filter(identifiant__in=['TEMP-ATOMIC-101', 'TEMP-ATOMIC-102']).count() == 0
+
+        monkeypatch.setattr(Sensor.objects, 'create', original_create)
+        recovered = api_client.post(IMPORT_URL, {'file': make_sensors_csv(csv_rows)}, format='multipart')
+        assert recovered.status_code == 200
+        assert recovered.data['imported'] == 2
+        assert Sensor.objects.filter(identifiant__in=['TEMP-ATOMIC-101', 'TEMP-ATOMIC-102']).count() == 2
+
     def test_09_missing_sensor_id(self, api_client, admin_user, machines):
         api_client.force_authenticate(admin_user)
         f = make_sensors_csv([{**row('', 'CNC-101'), 'sensor_id': ''}])
