@@ -163,11 +163,17 @@ class VoiceAgentAPIView(APIView):
                 return Response({'conversation_id': str(conversation.pk), 'reply': reply,
                                  'tools_called': [], 'proposal': None})
             from .interpreter import CommandInterpreter
-            if (CommandInterpreter.is_export_request(clean_text)
-                    or CommandInterpreter.is_machine_list_request(clean_text)):
+            if CommandInterpreter.is_export_request(clean_text):
                 return _safe_interpreter_fallback(request, clean_text, conversation, log)
             previous = list(conversation.messages or [])
-            messages = [{'role': 'system', 'content': SYSTEM_PROMPT}, *previous,
+            system_prompt = SYSTEM_PROMPT
+            if interaction_mode == 'voice':
+                system_prompt += (
+                    " En mode voix, réponds en trois phrases au plus, sauf demande explicite, "
+                    "sans Markdown, ni tableau, ni liste à puces, ni symboles. Pour une longue liste, "
+                    "donne un résumé court et propose de détailler."
+                )
+            messages = [{'role': 'system', 'content': system_prompt}, *previous,
                         {'role': 'user', 'content': clean_text}]
             client = get_llm_client()
             call_count = 0
@@ -183,6 +189,7 @@ class VoiceAgentAPIView(APIView):
                     final_text = message.get('content')
                     if not isinstance(final_text, str) or not final_text.strip():
                         raise LLMUnavailableError('Le fournisseur LLM a renvoyé une réponse vide.')
+                    log.premiere_phrase_ms = max(0, int((time.monotonic() - started) * 1000))
                     break
                 if not isinstance(tool_calls, list) or call_count + len(tool_calls) > MAX_TOOL_CALLS:
                     raise ToolCallError('tool_limit', 'Le modèle a dépassé la limite d’appels d’outils.')
@@ -272,12 +279,14 @@ class VoiceAgentAPIView(APIView):
             })
         except ToolCallError as exc:
             log.erreur = exc.code[:120]
-            logger.warning('Voice tool rejected; using local fallback code=%s', exc.code[:80])
-            return _safe_interpreter_fallback(request, clean_text, conversation, log)
+            logger.warning('Voice tool rejected code=%s', exc.code[:80])
+            return Response({'code': exc.code, 'detail': str(exc)}, status=status.HTTP_502_BAD_GATEWAY)
         except (LLMConfigurationError, LLMUnavailableError) as exc:
             log.erreur = 'llm_unavailable'
             logger.warning('Voice provider unavailable; using local fallback exception_type=%s', type(exc).__name__)
-            return _safe_interpreter_fallback(request, clean_text, conversation, log)
+            response = _safe_interpreter_fallback(request, clean_text, conversation, log)
+            response.data['fallback_reason'] = 'llm_unavailable'
+            return response
         except ConversationError as exc:
             log.erreur = exc.code
             return Response({'detail': str(exc)}, status=exc.status_code)
@@ -288,7 +297,7 @@ class VoiceAgentAPIView(APIView):
         finally:
             log.duree_ms = max(0, int((time.monotonic() - started) * 1000))
             log.save(update_fields=['conversation_id', 'outils_appeles', 'resume_resultat',
-                                    'duree_ms', 'statut', 'erreur'])
+                                    'duree_ms', 'statut', 'erreur', 'premiere_phrase_ms'])
 
     @staticmethod
     def _conversation(user, conversation_id):
@@ -333,10 +342,17 @@ class VoiceAgentStreamAPIView(APIView):
                 code = data.get('code') or data.get('detail') or 'request_failed'
                 code = str(code).split(':', 1)[0][:80]
                 events = [self._event('error', {'code': code})]
+            elif data.get('fallback_reason'):
+                events = [self._event('error', {'code': str(data['fallback_reason'])[:80]})]
             else:
                 events = [self._event('tool', {'name': name}) for name in data.get('tools_called', [])]
                 reply = str(data.get('reply') or '')
-                for sentence in split_speech_sentences(reply):
+                sentences = split_speech_sentences(reply)
+                # Proposal summaries also appear in the proposal card. Speak the
+                # action sentence once; keep the confirmation suffix in the card.
+                if data.get('proposal') and sentences:
+                    sentences = sentences[:1]
+                for sentence in sentences:
                     events.append(self._event('sentence', {'speech': normalize_speech(sentence)}))
                 if data.get('proposal'):
                     events.append(self._event('proposal', data['proposal']))

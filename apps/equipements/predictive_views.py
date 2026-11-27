@@ -8,7 +8,7 @@ from .ml_serializers import RULPredictionInputSerializer
 
 
 class PredictiveMaintenanceAPIView(APIView):
-    """Authenticated status/prediction endpoint for the CMAPSS RUL model."""
+   
     permission_classes = [IsAuthenticated]
 
     def get(self, request):

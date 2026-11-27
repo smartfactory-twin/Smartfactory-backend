@@ -1,12 +1,10 @@
-"""Module 8 — Serializers des alertes, notifications et canaux."""
 from rest_framework import serializers
 
 from .models import Alerte, Notification, PreferenceNotification
 
 
 class AlerteListSerializer(serializers.ModelSerializer):
-    """Ligne de liste : de quoi trier, filtrer et afficher la table."""
-
+   
     niveau_label = serializers.CharField(source='get_niveau_display', read_only=True)
     statut_label = serializers.CharField(source='get_statut_display', read_only=True)
     type_alerte_label = serializers.CharField(source='get_type_alerte_display', read_only=True)
@@ -39,8 +37,7 @@ class AlerteListSerializer(serializers.ModelSerializer):
 
 
 class AlerteDetailSerializer(AlerteListSerializer):
-    """Détail d'une alerte (§12) : tout l'historique de traitement."""
-
+    
     lecture = serializers.IntegerField(source='lecture_id', read_only=True, allow_null=True)
     lecture_valeur = serializers.SerializerMethodField()
     lecture_timestamp = serializers.SerializerMethodField()
@@ -75,8 +72,7 @@ class AlerteDetailSerializer(AlerteListSerializer):
 
 
 class AcquittementSerializer(serializers.Serializer):
-    """Acquittement (UC-29) : commentaire **obligatoire** (§13)."""
-
+    
     commentaire = serializers.CharField(
         allow_blank=False, trim_whitespace=True,
         error_messages={
@@ -95,8 +91,7 @@ class AcquittementSerializer(serializers.Serializer):
 
 
 class ResolutionSerializer(serializers.Serializer):
-    """Résolution manuelle (ADMIN / TECHNICIEN)."""
-
+    
     motif = serializers.CharField(required=False, allow_blank=True, default='')
 
 
@@ -132,8 +127,7 @@ class NotificationSerializer(serializers.ModelSerializer):
 
 
 class PreferenceNotificationSerializer(serializers.ModelSerializer):
-    """UC-28 — canaux de notification de l'utilisateur connecté."""
-
+    
     adresse_email_effective = serializers.CharField(
         source='adresse_email', read_only=True,
     )
@@ -153,12 +147,10 @@ class PreferenceNotificationSerializer(serializers.ModelSerializer):
         return NotificationService.smtp_configure()
 
     def get_sms_possible(self, obj):
-        return False  # Twilio : architecture prête, non activée dans ce sprint.
+        return False 
 
     def validate_email(self, value):
-        # Activer l'email alors qu'aucun SMTP n'est configuré est autorisé :
-        # l'envoi sera simplement journalisé comme « non configuré » et
-        # l'archivage de la preference n'échoue pas.
+      
         return value
 
     def validate_sms(self, value):

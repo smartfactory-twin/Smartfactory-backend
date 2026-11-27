@@ -1,25 +1,3 @@
-"""Module 8 — API Alertes & Notifications (UC-26 → UC-29).
-
-Endpoints exposés :
-
-    GET    /api/alertes/                      liste filtrable / triable / paginée
-    GET    /api/alertes/statistiques/         compteurs par niveau / statut
-    GET    /api/alertes/compteur/             alertes actives + critiques (badge)
-    GET    /api/alertes/{id}/                 détail
-    POST   /api/alertes/{id}/acquitter/       acquittement (commentaire obligatoire)
-    POST   /api/alertes/{id}/resoudre/        résolution manuelle
-    POST   /api/alertes/{id}/preparer-ot/     pré-remplissage d'un OT (Module 9)
-
-    GET    /api/notifications/                mes notifications
-    POST   /api/notifications/tout-lire/      tout marquer comme lu
-    GET    /api/notifications/compteur/       nombre de notifications non lues
-    POST   /api/notifications/{id}/lire/      marquer une notification comme lue
-
-    GET    /api/canaux-notification/mien/     mes canaux (UC-28)
-    PATCH  /api/canaux-notification/mien/     activer / désactiver un canal
-
-Toutes les lectures sont filtrées côté backend par le périmètre `UserScope`.
-"""
 from datetime import datetime, timedelta
 
 from django.db.models import Case, Count, IntegerField, Q, Value, When
@@ -60,8 +38,7 @@ GRAVITE_NIVEAU = {
 
 
 class AlerteOrderingFilter(filters.OrderingFilter):
-    """Tri par niveau selon la **gravité**, et non selon l'ordre alphabétique."""
-
+    
     ordering_fields = ['date_declenchement', 'niveau', 'statut', 'valeur', 'machine__nom']
     ordering = ['-date_declenchement']
 
@@ -84,7 +61,6 @@ class AlerteOrderingFilter(filters.OrderingFilter):
 
 
 class AlertesParMachineView(APIView):
-    """Agrégation de lecture, toujours limitée par le scope d'alertes existant."""
     permission_classes = [AlerteAccessPermission]
 
     def get(self, request):
@@ -125,12 +101,7 @@ class AlertesParMachineView(APIView):
 
 
 class AlerteViewSet(viewsets.ReadOnlyModelViewSet):
-    """Consultation et traitement des alertes.
-
-    Une alerte n'est ni créée ni supprimée par l'API : elle naît de
-    l'ingestion d'une mesure (UC-26) et son historique est conservé.
-    """
-
+    
     queryset = Alerte.objects.select_related(
         'machine', 'capteur', 'lecture', 'acquittee_par',
     ).all()
@@ -148,7 +119,7 @@ class AlerteViewSet(viewsets.ReadOnlyModelViewSet):
                      'capteur__identifiant', 'capteur__nom']
 
     def get_queryset(self):
-        """Filtrage par périmètre `UserScope` — la source de vérité reste le backend."""
+      
         return scope_queryset_alerte(super().get_queryset(), self.request.user)
 
     def get_serializer_class(self):
@@ -156,7 +127,6 @@ class AlerteViewSet(viewsets.ReadOnlyModelViewSet):
 
     @action(detail=False, methods=['get'], url_path='tableau-de-bord')
     def tableau_de_bord(self, request):
-        """Fournit en peu de requêtes les compteurs et la série du dashboard."""
         base = scope_queryset_alerte(Alerte.objects.all(), request.user)
         active = Q(statut=Alerte.Statut.ACTIVE)
         totals = base.aggregate(
@@ -198,7 +168,7 @@ class AlerteViewSet(viewsets.ReadOnlyModelViewSet):
 
         return Response({**totals, 'par_niveau': par_niveau, 'par_jour': par_jour})
 
-    # ── Acquittement (UC-29) ──────────────────────────────────────────────
+    #  Acquittement (UC-29) ──────────────────────────────────────────────
     @action(detail=True, methods=['post'], url_path='acquitter')
     def acquitter(self, request, pk=None):
         """Acquitte l'alerte. Un commentaire est **obligatoire** (§13)."""
@@ -220,10 +190,10 @@ class AlerteViewSet(viewsets.ReadOnlyModelViewSet):
 
         return Response(AlerteDetailSerializer(alerte).data, status=status.HTTP_200_OK)
 
-    # ── Résolution manuelle ────────────────────────────────────────────────
+    #  Résolution manuelle 
     @action(detail=True, methods=['post'], url_path='resoudre')
     def resoudre(self, request, pk=None):
-        """Clôture manuelle (le retour à la normale est fait par le moteur)."""
+        
         alerte = self.get_object()
         serializer = ResolutionSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -235,10 +205,10 @@ class AlerteViewSet(viewsets.ReadOnlyModelViewSet):
             )
         return Response(AlerteDetailSerializer(alerte).data, status=status.HTTP_200_OK)
 
-    # ── Préparation d'un ordre de travail (§14) ────────────────────────────
+    #  Préparation d'un ordre de travail 
     @action(detail=True, methods=['post'], url_path='preparer-ot')
     def preparer_ot(self, request, pk=None):
-        """Crée (ou retrouve) l'ordre de travail correctif lié à l'alerte."""
+        
         alerte = self.get_object()
         from apps.equipements.models import OrdreTravail
         from apps.equipements.serializers import OrdreTravailSerializer
@@ -297,7 +267,7 @@ class AlerteViewSet(viewsets.ReadOnlyModelViewSet):
             'message': f'Ordre de travail OT-{ordre.pk} créé ou déjà associé à cette alerte.',
         }, status=status.HTTP_200_OK)
 
-    # ── Compteurs (badge / tableau de bord) ────────────────────────────────
+    #  Compteurs (badge / tableau de bord) 
     @action(detail=False, methods=['get'], url_path='statistiques')
     def statistiques(self, request):
         """Compteurs par niveau et par statut, périmètre `UserScope` inclus."""
@@ -328,8 +298,7 @@ class AlerteViewSet(viewsets.ReadOnlyModelViewSet):
 
 
 class AlerteCompteurView(APIView):
-    """Compteur léger d'alertes actives (badge de navigation)."""
-
+ 
     permission_classes = [AlerteAccessPermission]
 
     def get(self, request):
@@ -343,8 +312,7 @@ class AlerteCompteurView(APIView):
 
 
 class NotificationViewSet(viewsets.ReadOnlyModelViewSet):
-    """Notifications In-App de l'utilisateur connecté (UC-28)."""
-
+    
     queryset = Notification.objects.select_related('alerte', 'alerte__machine').all()
     serializer_class = NotificationSerializer
     permission_classes = [NotificationAccessPermission]
@@ -359,14 +327,14 @@ class NotificationViewSet(viewsets.ReadOnlyModelViewSet):
 
     @action(detail=True, methods=['post'], url_path='lire')
     def lire(self, request, pk=None):
-        """Marque une notification comme lue (idempotent)."""
+       
         notification = self.get_object()
         notification.marquer_lue()
         return Response(NotificationSerializer(notification).data, status=status.HTTP_200_OK)
 
     @action(detail=False, methods=['post'], url_path='tout-lire')
     def tout_lire(self, request):
-        """Marque toutes les notifications de l'utilisateur comme lues."""
+        
         non_lues = self.get_queryset().filter(lue=False)
         total = non_lues.count()
         non_lues.update(lue=True, date_lecture=timezone.now())
@@ -374,12 +342,12 @@ class NotificationViewSet(viewsets.ReadOnlyModelViewSet):
 
     @action(detail=False, methods=['get'], url_path='compteur')
     def compteur(self, request):
-        """Nombre de notifications non lues (badge de la cloche)."""
+        
         return Response({'non_lues': self.get_queryset().filter(lue=False).count()})
 
 
 class MonCanauxNotificationView(APIView):
-    """UC-28 — canaux de notification de l'utilisateur connecté."""
+    
 
     permission_classes = [IsAuthenticated]
 

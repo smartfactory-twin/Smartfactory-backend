@@ -1,12 +1,3 @@
-"""Envoi d'emails HTML avec le logo SmartFactory intégré (inline CID).
-
-Les images en data-URI (``data:image/png;base64,...``) sont bloquées ou
-supprimées par la plupart des clients de messagerie (Gmail, Outlook, Yahoo...).
-La méthode fiable consiste à joindre l'image à l'email en pièce "inline"
-(``Content-Disposition: inline``) puis à la référencer dans le HTML via
-``cid:``. On force l'enveloppe en ``multipart/related`` pour que les clients
-résolvent correctement le ``cid:``.
-"""
 import base64
 import os
 from email.mime.image import MIMEImage
@@ -14,17 +5,13 @@ from email.mime.image import MIMEImage
 from django.conf import settings
 from django.core.mail import EmailMultiAlternatives
 
-# Identifiant utilisé dans le HTML : <img src="cid:smartfactory-logo">
+# Identifiant utilisé dans le HTML 
 LOGO_CID = 'smartfactory-logo'
 LOGO_FILENAME = 'logoSmart.png'
 
 
 def get_logo_bytes():
-    """Retourne les octets PNG du logo, ou ``None`` s'il est introuvable.
-
-    On privilégie ``EMAIL_LOGO_B64`` (logo déjà redimensionné au démarrage)
-    puis on retombe sur la lecture directe des fichiers connus.
-    """
+    
     b64 = getattr(settings, 'EMAIL_LOGO_B64', '')
     if b64:
         try:
@@ -50,10 +37,7 @@ def get_logo_bytes():
 
 
 def send_html_email(subject, text_body, html_body, to_email, fail_silently=False):
-    """Envoie un email HTML avec le logo SmartFactory en pièce inline.
 
-    Retourne le message construit (utile pour les tests).
-    """
     message = EmailMultiAlternatives(
         subject=subject,
         body=text_body,

@@ -284,12 +284,7 @@ class Reading(models.Model):
 
 
 class InspectionVisuelle(models.Model):
-    """Module 4 — Inspection visuelle par IA d'une machine.
-
-    Une inspection associe une image à une machine existante (Module 2) et
-    conserve le résultat d'une analyse IA (via `VisionAIService`).
-    """
-
+   
     class StatutAnalyse(models.TextChoices):
         EN_ATTENTE = 'EN_ATTENTE', 'En attente'
         EN_ANALYSE = 'EN_ANALYSE', 'En analyse'
@@ -388,27 +383,9 @@ class InspectionVisuelle(models.Model):
         return f'Inspection #{self.pk} — {self.machine.nom} ({self.get_statut_analyse_display()})'
 
 
-# ── Périmètres d'accès (affectations utilisateur ↔ équipements) ────────────────
+#  Périmètres d'accès 
 
 class UserScope(models.Model):
-    """Affectation d'un utilisateur à un périmètre de la hiérarchie industrielle.
-
-    Modèle explicite (et non un simple FK sur `Utilisateur`) car un utilisateur
-    peut avoir **plusieurs** périmètres, à des niveaux différents :
-
-        Opérateur  → Ligne CNC 01, Ligne CNC 02
-        Technicien → Zone Usinage, Machine Robot RA-104
-
-    Le niveau cible est déduit du seul champ renseigné :
-
-    * `usine`   → toute l'usine (et zones / lignes / machines descendantes) ;
-    * `zone`    → toute la zone (et lignes / machines descendantes) ;
-    * `ligne`   → les machines de la ligne ;
-    * `machine` → cette machine seule.
-
-    `ADMIN` n'a pas besoin d'affectation : son accès est global.
-    Les affectations peuvent être historisées via `date_debut` / `date_fin`.
-    """
 
     class Meta:
         verbose_name = "Périmètre d'accès"
@@ -477,7 +454,7 @@ class UserScope(models.Model):
         return f'{self.utilisateur} → {cible}'
 
     def clean(self):
-        """Valide : une seule cible, pas de doublon pour un même utilisateur."""
+        
         from django.core.exceptions import ValidationError
 
         cibles = [self.usine_id, self.zone_id, self.ligne_id, self.machine_id]
@@ -502,7 +479,7 @@ class UserScope(models.Model):
         super().save(*args, **kwargs)
 
     def est_active(self, now=None):
-        """L'affectation est-elle en cours de validité ?"""
+        
         from django.utils import timezone
         now = now or timezone.now()
         if not self.actif:
@@ -515,8 +492,7 @@ class UserScope(models.Model):
 
 
 class OrdreTravail(models.Model):
-    """Ordre de travail durable pour le workflow CMMS du projet."""
-
+    
     class Type(models.TextChoices):
         CORRECTIVE = 'Corrective', 'Corrective'
         PREVENTIVE = 'Préventive', 'Préventive'
@@ -563,8 +539,7 @@ class OrdreTravail(models.Model):
 
 
 class MaintenanceRecurrente(models.Model):
-    """Plan périodique utilisé pour projeter les entretiens au calendrier."""
-
+   
     machine = models.ForeignKey(Machine, on_delete=models.CASCADE, related_name='maintenances_recurrentes')
     titre = models.CharField(max_length=200)
     frequence_jours = models.PositiveIntegerField(default=30)

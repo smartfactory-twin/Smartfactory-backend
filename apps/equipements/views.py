@@ -46,7 +46,9 @@ from .vision_ai import get_vision_service
 
 
 class UsineViewSet(viewsets.ModelViewSet):
-    queryset = Usine.objects.all()
+    queryset = Usine.objects.annotate(zones_count=Count('zones')).prefetch_related(
+        'zones__lignes__machines__composants',
+    )
     serializer_class = UsineSerializer
     permission_classes = [IsAdminOrReadOnly]
     filter_backends = [DjangoFilterBackend, SearchFilter, OrderingFilter]
@@ -131,6 +133,12 @@ class LigneProductionViewSet(viewsets.ModelViewSet):
     ordering_fields = ['nom']
 
 
+class MachinePagination(PageNumberPagination):
+    page_size = 20
+    page_size_query_param = 'page_size'
+    max_page_size = 200
+
+
 class MachineViewSet(viewsets.ModelViewSet):
     latest_reading = Reading.objects.filter(
         sensor__machine=OuterRef('pk'), est_valide=True
@@ -139,12 +147,13 @@ class MachineViewSet(viewsets.ModelViewSet):
         'ligne_production',
         'ligne_production__zone',
         'ligne_production__zone__usine'
-    ).prefetch_related('composants', 'documents').annotate(
+    ).annotate(
         derniere_valeur=Subquery(latest_reading.values('valeur')[:1]),
         derniere_unite=Subquery(latest_reading.values('sensor__unite')[:1]),
         derniere_lecture_at=Subquery(latest_reading.values('timestamp')[:1]),
     )
     permission_classes = [MachineAccessPermission, ScopedMachineAccess]
+    pagination_class = MachinePagination
     filter_backends = [DjangoFilterBackend, SearchFilter, OrderingFilter]
     filterset_fields = ['statut', 'type_equipement', 'ligne_production__zone', 'ligne_production__zone__usine']
     search_fields = ['nom', 'identifiant_interne', 'numero_serie']
@@ -152,7 +161,12 @@ class MachineViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         """Restreint la liste ET le détail au périmètre d'affectation (backend)."""
-        return scope_queryset_machine(super().get_queryset(), self.request.user)
+        queryset = scope_queryset_machine(super().get_queryset(), self.request.user)
+        # Les composants et documents ne figurent pas dans le serializer de liste.
+        # Ne les précharge que pour les vues de détail qui les exposent.
+        if self.action != 'list':
+            queryset = queryset.prefetch_related('composants', 'documents')
+        return queryset
 
     def get_serializer_class(self):
         if self.action == 'list':

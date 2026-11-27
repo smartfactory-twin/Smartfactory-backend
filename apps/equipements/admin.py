@@ -33,7 +33,7 @@ class ComposantAdmin(admin.ModelAdmin):
     list_display = ['nom', 'machine', 'numero_piece']
 
 
-# ── Module 3 — Capteurs & Données IoT ─────────────────────────────────────────
+# Capteurs & Données IoT
 
 @admin.register(Sensor)
 class SensorAdmin(admin.ModelAdmin):
@@ -65,7 +65,7 @@ class InspectionVisuelleAdmin(admin.ModelAdmin):
     date_hierarchy = 'date_inspection'
 
 
-# ── Périmètres d'accès (affectations) ─────────────────────────────────────────
+# Périmètres d'accès 
 
 @admin.register(UserScope)
 class UserScopeAdmin(admin.ModelAdmin):

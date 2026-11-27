@@ -1,0 +1,11 @@
+{
+  "browser": "Chromium headless",
+  "iterations": 30,
+  "criterion_ms": 3000,
+  "measured_ms": {
+    "min": 501,
+    "median": 766,
+    "p95": 2615,
+    "max": 2656
+  }
+}

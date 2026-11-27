@@ -1,8 +1,3 @@
-"""CMAPSS remaining-useful-life training and inference helpers.
-
-The model is for NASA's simulated turbofan benchmark only. Its 21 sensor channels
-do not map automatically to the generic SmartFactory machine sensors.
-"""
 from __future__ import annotations
 
 from functools import lru_cache
@@ -12,7 +7,7 @@ from django.conf import settings
 
 WINDOW_SIZE = 30
 RUL_CAP = 125
-INPUT_FEATURES = 24  # 3 operating settings + 21 sensor readings
+INPUT_FEATURES = 24  
 DATASETS = ('FD001', 'FD002', 'FD003', 'FD004')
 
 
@@ -22,7 +17,7 @@ def model_path() -> Path:
 
 
 def _make_features(history, cycle):
-    """Fixed-size features: current values, rolling stats and recent trends."""
+    
     import numpy as np
     rows = np.asarray(history, dtype=np.float32)
     if rows.ndim != 2 or rows.shape[1] != INPUT_FEATURES or rows.shape[0] == 0:
@@ -110,7 +105,7 @@ def _metrics(actual, predicted):
 
 
 def train_model(data_dir, output_path, datasets=DATASETS):
-    """Train, validate on held-out engines, evaluate official test sets, save."""
+    
     import joblib
     import numpy as np
     import sklearn

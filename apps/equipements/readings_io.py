@@ -1,16 +1,3 @@
-"""Module 3 — UC-09 / UC-10 : Ingestion et prétraitement des mesures de capteurs.
-
-Ce module est distinct de `csv_hierarchy.py` (Module 2).
-- Module 2 : CSV → Usine / Zone / Ligne / Machine / Composant
-- Module 3 : CSV / JSON → Lectures de capteurs (Sensor readings)
-
-Règles de prétraitement (UC-10) :
-- RULE 1 : valeurs hors plage (seuil_min / seuil_max) → marquées `hors_plage`,
-  la donnée d'origine n'est jamais supprimée silencieusement.
-- RULE 2 : données manquantes. Les trous < 5 minutes sont interpolés,
-  les trous >= 5 minutes ne sont pas inventés.
-- RULE 3 : tous les timestamps sont normalisés et stockés en UTC.
-"""
 from __future__ import annotations
 
 import csv
@@ -25,13 +12,10 @@ from .models import Sensor, Reading
 INTERPOLATION_GAP = timedelta(minutes=5)
 
 
-# ── Utilitaires ───────────────────────────────────────────────────────────────
+#  Utilitaires 
 
 def normalize_timestamp(value):
-    """Convertit une valeur quelconque en datetime *aware* UTC.
 
-    Lève ``ValueError`` si la valeur est invalide.
-    """
     if value is None:
         raise ValueError('Timestamp manquant.')
 
@@ -53,7 +37,7 @@ def normalize_timestamp(value):
             except ValueError as exc:
                 raise ValueError(f'Timestamp invalide : {value}') from exc
 
-    # Normalisation UTC : un timestamp naïf est considéré comme UTC.
+    #  un timestamp naïf est considéré comme UTC.
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=dt_timezone.utc)
     return dt.astimezone(dt_timezone.utc)
@@ -71,7 +55,7 @@ def _parse_value(raw):
 
 
 def _extract_keys(item):
-    """Récupère sensor/value/timestamp en tolérant plusieurs alias de colonnes."""
+
     sensor_id = (
         item.get('sensor_id')
         or item.get('sensor')
@@ -96,21 +80,17 @@ def apply_preprocessing(reading: Reading) -> Reading:
 
 
 def _is_out_of_range(value, sensor):
-    """Ignore les seuils absents; sans seuil défini, aucune plage n'est enfreinte."""
+   
     return (
         (sensor.seuil_min is not None and value < sensor.seuil_min)
         or (sensor.seuil_max is not None and value > sensor.seuil_max)
     )
 
 
-# ── Analyse / import ──────────────────────────────────────────────────────────
+#  Analyse / import
 
 def _process_items(items, dry_run=False):
-    """Analyse puis (optionnellement) insère une liste de mesures.
-
-    Retourne un rapport d'import stable pour l'API :
-    imported, rejected, duplicates, out_of_range, interpolated, errors, total_rows.
-    """
+    
     imported = 0
     rejected = 0
     duplicates = 0
@@ -197,7 +177,7 @@ def _process_items(items, dry_run=False):
 
 
 def import_readings_from_csv(file_obj, dry_run=False):
-    """Importe des mesures depuis un fichier CSV (colonnes sensor_id, timestamp, value)."""
+   
     raw = file_obj.read()
     content = None
     for encoding in ('utf-8-sig', 'utf-8', 'latin1', 'cp1252'):
@@ -216,23 +196,16 @@ def import_readings_from_csv(file_obj, dry_run=False):
 
 
 def import_readings_from_json(data, dry_run=False):
-    """Importe des mesures depuis une liste JSON de dicts."""
+   
     if not isinstance(data, list):
         raise ValueError('Un tableau JSON est requis.')
     return _process_items(data, dry_run=dry_run)
 
 
-# ── UC-10, RULE 2 : interpolation des trous < 5 minutes ───────────────────────
+
 
 def interpolate_sensor_readings(sensor: Sensor) -> int:
-    """Interpole les mesures manquantes quand le trou est < 5 minutes.
 
-    Un trou est considéré comme « manquant » uniquement s'il est plus grand
-    que la fréquence de mesure configurée (sinon aucun échantillon n'est perdu).
-    Les trous >= 5 minutes ne génèrent aucune valeur inventée.
-
-    Retourne le nombre de valeurs interpolées créées.
-    """
     readings = list(
         Reading.objects.filter(sensor=sensor, interpolation=False)
         .order_by('timestamp')
@@ -275,16 +248,10 @@ def interpolate_sensor_readings(sensor: Sensor) -> int:
     return created
 
 
-# ── UC-10 : pipeline de prétraitement ─────────────────────────────────────────
+# pipeline de prétraitement 
 
 def preprocess_readings(sensor=None):
-    """Applique le prétraitement UC-10 à un capteur (ou à tous).
 
-    - RULE 1 : (re)marque les valeurs hors plage **sans les supprimer**.
-    - RULE 2 : interpole les trous < 5 minutes (aucune invention au-delà).
-
-    Retourne un rapport : ``{sensors_processed, out_of_range, interpolated}``.
-    """
     sensors = [sensor] if sensor is not None else list(Sensor.objects.all())
 
     out_of_range = 0

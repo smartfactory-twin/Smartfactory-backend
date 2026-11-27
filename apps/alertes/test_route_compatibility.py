@@ -1,4 +1,3 @@
-"""Regression coverage for alert and notification routes beside new routes."""
 from datetime import timedelta
 
 import pytest

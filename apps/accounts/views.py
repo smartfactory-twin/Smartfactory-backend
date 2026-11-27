@@ -21,7 +21,6 @@ import string
 
 from .serializers import (
     CustomTokenObtainPairSerializer,
-    GoogleLoginSerializer,
     RegisterSerializer,
     UserSerializer,
     PasswordResetSerializer,
@@ -47,15 +46,14 @@ _SCOPE_TARGETS = ('usine', 'zone', 'ligne', 'machine')
 
 
 class PerimetreInvalide(Exception):
-    """Signale une affectation refusée ; utilisé pour annuler la transaction."""
-
+ 
     def __init__(self, message):
         super().__init__(message)
         self.message = message
 
 
 class VocalCommandHistoryView(APIView):
-    """Historique textuel privé; l'administrateur peut consulter le journal global."""
+    
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
@@ -73,7 +71,6 @@ class VocalCommandHistoryView(APIView):
 
 
 class AuditLogListView(APIView):
-    """Historique d’audit en lecture seule, réservé aux administrateurs."""
     permission_classes = [IsAdmin]
 
     def get(self, request):
@@ -107,7 +104,6 @@ class AuditLogListView(APIView):
 
 
 class AdminUserActivityView(APIView):
-    """Combine audit events with durable alert acknowledgements and work orders."""
     permission_classes = [IsAdmin]
 
     def get(self, request, user_id):
@@ -183,11 +179,7 @@ class AdminUserActivityView(APIView):
 
 
 def _valider_perimetres(perimetres):
-    """Valide le payload `perimetres` SANS rien créer.
-
-    Format : [{ "usine": 1 }, { "zone": 2 }, { "ligne": 3 }, { "machine": 4 }]
-    Retourne (liste de payloads, None) ou (None, message d'erreur).
-    """
+    
     from apps.equipements.serializers import UserScopeSerializer
 
     if not perimetres:  # liste vide = aucune affectation demandée
@@ -218,7 +210,7 @@ def _valider_perimetres(perimetres):
 
 
 def _appliquer_perimetres(user, payloads):
-    """Crée les `UserScope`. Lève `PerimetreInvalide` pour annuler la transaction."""
+   
     from apps.equipements.serializers import UserScopeSerializer
 
     for index, payload in enumerate(payloads):
@@ -234,7 +226,7 @@ def _appliquer_perimetres(user, payloads):
 
 
 def generate_strong_password(length: int = 14) -> str:
-    """Génère un mot de passe aléatoire fort (lettres + chiffres + symboles)."""
+    
     alphabet = string.ascii_letters + string.digits + string.punctuation
     # Garantir au moins une lettre, un chiffre et un symbole pour les validateurs
     while True:
@@ -247,7 +239,7 @@ def generate_strong_password(length: int = 14) -> str:
             return password
 
 
-# ─── Login ────────────────────────────────────────────────────────────────────
+#  Login 
 @extend_schema(
     tags=['Authentification'],
     summary='Connexion utilisateur',
@@ -324,96 +316,8 @@ class LoginView(TokenObtainPairView):
         return Response(serializer.validated_data, status=status.HTTP_200_OK)
 
 
-class GoogleLoginView(APIView):
-    """Connexion Google pour les comptes SmartFactory existants uniquement."""
 
-    permission_classes = [AllowAny]
-    throttle_classes = [LoginThrottle]
-
-    def post(self, request):
-        if not settings.GOOGLE_OAUTH_CLIENT_ID:
-            return Response(
-                {'error': 'La connexion Google n’est pas configurée sur le serveur.'},
-                status=status.HTTP_503_SERVICE_UNAVAILABLE,
-            )
-
-        serializer = GoogleLoginSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-
-        try:
-            from google.auth.exceptions import TransportError
-            from google.auth.transport.requests import Request as GoogleRequest
-            from google.oauth2 import id_token
-
-            claims = id_token.verify_oauth2_token(
-                serializer.validated_data['credential'],
-                GoogleRequest(),
-                settings.GOOGLE_OAUTH_CLIENT_ID,
-            )
-        except ValueError:
-            return Response({'error': 'Le jeton Google est invalide ou expiré.'}, status=status.HTTP_401_UNAUTHORIZED)
-        except TransportError as exc:
-            logger.warning('Vérification Google indisponible (%s).', type(exc).__name__)
-            return Response({'error': 'La vérification Google est temporairement indisponible.'}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
-        except Exception as exc:  # Fail closed; do not expose token or provider details.
-            logger.warning('Échec de vérification Google (%s).', type(exc).__name__)
-            return Response({'error': 'Impossible de vérifier la connexion Google.'}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
-
-        subject = claims.get('sub')
-        email = (claims.get('email') or '').strip().lower()
-        email_verified = claims.get('email_verified') is True
-        hosted_domain = claims.get('hd')
-        is_authoritative_email = email.endswith('@gmail.com') or bool(hosted_domain)
-        if not subject or not email or not email_verified or not is_authoritative_email:
-            return Response(
-                {'error': 'Google doit fournir un e-mail vérifié Gmail ou Google Workspace.'},
-                status=status.HTTP_401_UNAUTHORIZED,
-            )
-
-        try:
-            with transaction.atomic():
-                user = User.objects.select_for_update().filter(google_sub=subject).first()
-                if user is None:
-                    user = User.objects.select_for_update().filter(email=email).first()
-                if user is None:
-                    return Response(
-                        {'error': 'Aucun compte SmartFactory actif ne correspond à cet e-mail. Contactez un administrateur.'},
-                        status=status.HTTP_403_FORBIDDEN,
-                    )
-                if not user.actif:
-                    return Response({'error': 'Ce compte est inactif. Contactez un administrateur.'}, status=status.HTTP_403_FORBIDDEN)
-                if user.must_reset_password:
-                    return Response({'error': 'Terminez d’abord la première connexion avec votre mot de passe temporaire.'}, status=status.HTTP_403_FORBIDDEN)
-                if user.google_sub and user.google_sub != subject:
-                    return Response({'error': 'Cet e-mail est déjà associé à une autre identité Google.'}, status=status.HTTP_403_FORBIDDEN)
-
-                if user.google_sub != subject:
-                    user.google_sub = subject
-                    user.last_login = timezone.now()
-                    user.save(update_fields=['google_sub', 'last_login'])
-                else:
-                    user.last_login = timezone.now()
-                    user.save(update_fields=['last_login'])
-
-                refresh = CustomTokenObtainPairSerializer.get_token(user)
-                return Response({
-                    'refresh': str(refresh),
-                    'access': str(refresh.access_token),
-                    'user': {
-                        'id': user.id,
-                        'nom': user.nom,
-                        'prenom': user.prenom,
-                        'email': user.email,
-                        'role': user.role,
-                        'role_label': user.get_role_display(),
-                    },
-                }, status=status.HTTP_200_OK)
-        except IntegrityError:
-            return Response({'error': 'Cette identité Google est déjà associée à un autre compte.'}, status=status.HTTP_403_FORBIDDEN)
-
-
-
-# ─── Logout ───────────────────────────────────────────────────────────────────
+#  Logout 
 @extend_schema(
     tags=['Authentification'],
     summary='Déconnexion utilisateur',
@@ -455,7 +359,7 @@ class LogoutView(APIView):
             )
 
 
-# ─── Token Refresh ────────────────────────────────────────────────────────────
+#  Token Refresh 
 @extend_schema(
     tags=['Authentification'],
     summary='Rafraîchir le token d\'accès',
@@ -544,7 +448,7 @@ class RegisterView(generics.CreateAPIView):
         return Response(UserSerializer(user).data, status=status.HTTP_201_CREATED)
 
 
-# ─── Profil utilisateur connecté ─────────────────────────────────────────────
+# Profil utilisateur connecté 
 @extend_schema(
     tags=['Authentification'],
     summary='Profil utilisateur connecté',
@@ -562,7 +466,7 @@ class MeView(generics.RetrieveAPIView):
         return self.request.user
 
 
-# ─── Demande de réinitialisation de mot de passe ─────────────────────────────
+# Demande de réinitialisation de mot de passe 
 @extend_schema(
     tags=['Authentification'],
     summary='Demande de réinitialisation de mot de passe',
@@ -801,7 +705,7 @@ class PasswordResetConfirmView(APIView):
         )
 
 
-# ─── Création d'utilisateur par un ADMIN ────────────────────────────────────
+#  Création d'utilisateur par un ADMIN 
 @extend_schema(
     tags=['Authentification'],
     summary='Création d\'utilisateur par un administrateur',
@@ -1110,7 +1014,7 @@ class AdminUserListView(generics.ListAPIView):
         return qs
 
 
-# ─── Mise à jour du profil (nom, prénom, téléphone) ─────────────────────────
+# Mise à jour du profil (nom, prénom, téléphone) $
 @extend_schema(
     tags=['Authentification'],
     summary='Mettre à jour son profil',
@@ -1142,8 +1046,7 @@ class AdminUserListView(generics.ListAPIView):
     },
 )
 class UpdateProfileView(generics.UpdateAPIView):
-    """Mise à jour partielle du profil (nom, prénom, téléphone, photo)."""
-
+  
     serializer_class = UpdateProfileSerializer
     permission_classes = [IsAuthenticated]
     http_method_names = ['patch']
@@ -1165,7 +1068,7 @@ class UpdateProfileView(generics.UpdateAPIView):
         )
 
 
-# ─── Changement de mot de passe direct (connecté, sans token email) ──────────
+# Changement de mot de passe direct (connecté, sans token email) 
 @extend_schema(
     tags=['Authentification'],
     summary='Changer son mot de passe (connecté)',
@@ -1198,8 +1101,7 @@ class UpdateProfileView(generics.UpdateAPIView):
     },
 )
 class ChangePasswordView(APIView):
-    """Changement de mot de passe direct pour un utilisateur authentifié."""
-
+ 
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
@@ -1226,7 +1128,7 @@ class ChangePasswordView(APIView):
         )
 
 
-# ─── Suppression d'un utilisateur (ADMIN) ───────────────────────────────────
+#  Suppression d'un utilisateur (ADMIN)
 @extend_schema(
     tags=['Authentification'],
     summary='Supprimer un utilisateur (ADMIN)',
@@ -1240,8 +1142,7 @@ class ChangePasswordView(APIView):
     },
 )
 class AdminUserDeleteView(generics.DestroyAPIView):
-    """Suppression d'un utilisateur — ADMIN uniquement."""
-
+   
     permission_classes = [IsAuthenticated, IsAdmin]
     queryset = User.objects.all()
 
@@ -1256,7 +1157,7 @@ class AdminUserDeleteView(generics.DestroyAPIView):
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
-# ─── Mise à jour d'un utilisateur par l'ADMIN ───────────────────────────────
+#  Mise à jour d'un utilisateur par l'ADMIN 
 @extend_schema(
     tags=['Authentification'],
     summary='Modifier un utilisateur (ADMIN)',
@@ -1270,7 +1171,6 @@ class AdminUserDeleteView(generics.DestroyAPIView):
     },
 )
 class AdminUserUpdateView(generics.UpdateAPIView):
-    """Modification d'un utilisateur par l'admin (rôle, actif, nom, prénom)."""
 
     permission_classes = [IsAuthenticated, IsAdmin]
     queryset = User.objects.all()

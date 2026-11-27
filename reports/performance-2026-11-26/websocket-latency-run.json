@@ -1,0 +1,13 @@
+{
+  "sensor_id": 1,
+  "requested_iterations": 30,
+  "successful_samples": 30,
+  "failures": [],
+  "latency_ms": {
+    "min": 50.73,
+    "median": 106.26,
+    "p95": 1430.47,
+    "max": 1447.23
+  },
+  "criterion_ms": 2000
+}

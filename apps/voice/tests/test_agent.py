@@ -341,7 +341,7 @@ def test_rate_limit_is_scoped_to_authenticated_user(voice_setup, monkeypatch):
 
 
 @pytest.mark.django_db
-def test_llm_unavailable_returns_503_and_safe_frontend_fallback(voice_setup, monkeypatch):
+def test_llm_unavailable_uses_safe_local_fallback(voice_setup, monkeypatch):
     from apps.voice.llm import LLMUnavailableError
 
     fake = ScriptedLLM(LLMUnavailableError('Le fournisseur LLM est indisponible.'))
@@ -349,8 +349,11 @@ def test_llm_unavailable_returns_503_and_safe_frontend_fallback(voice_setup, mon
     response = make_client(voice_setup['admin']).post(
         '/api/voice/agent/', {'message': 'Salut'}, format='json',
     )
-    assert response.status_code == 503
-    assert 'mode règles actuel' in response.data['fallback']
+    assert response.status_code == 200
+    assert response.data['fallback'] is True
+    assert response.data['fallback_reason'] == 'llm_unavailable'
+    assert response.data['proposal'] is None
+    assert 'Bonjour' in response.data['reply']
     assert VoiceAgentRequest.objects.latest('pk').erreur == 'llm_unavailable'
 
 
@@ -390,7 +393,9 @@ def test_provider_error_logs_diagnostics_without_api_key_or_jwt(
     finally:
         provider_logger.removeHandler(caplog.handler)
 
-    assert response.status_code == 503
+    assert response.status_code == 200
+    assert response.data['fallback'] is True
+    assert response.data['fallback_reason'] == 'llm_unavailable'
     response_text = json.dumps(response.data)
     assert api_key not in response_text
     assert jwt_value not in response_text

@@ -1,70 +1,3 @@
-"""Module 8 — Moteur de déclenchement des alertes (UC-26 / UC-27).
-
-Point d'entrée unique : `evaluer_lecture(reading)`. Il est appelé par le
-signal `post_save` sur `Reading` (voir `signals.py`), donc **par tous** les
-chemins d'ingestion existants : `POST /api/readings/`, `import_csv`,
-`import_json`, action `preprocess`. Aucune logique parallèle.
-
-── Logique de déclenchement ────────────────────────────────────────────────────
-
-1. La mesure est ignorée si la mesure est *interpolée* (`Reading.interpolation`)
-   : on n'alerte pas sur une valeur inventée par le Module 3.
-2. La surveillance est ignorée si `Sensor.actif` est `False` : c'est
-   l'activation/désactivation de la surveillance demandée par l'UC-26.
-3. Si un seuil existe et que la valeur le franchit, une alerte est créée.
-   Les seuils absents sont ignorés. Si aucun seuil n'est franchi, les alertes
-   ouvertes du capteur sont résolues.
-
-Le **statut de la machine n'est jamais modifié** ici : la machine garde sa
-propre logique de statut.
-
-── Niveau (UC-27) — règle explicite, sans IA, configurable ─────────────────────
-
-Deux métriques sont calculées à partir des seuils *existants* du capteur :
-
-* `depassement      = |valeur − seuil franchi|`
-* `ratio_plage_pct  = depassement / (seuil_max − seuil_min) × 100` si les
-  deux seuils existent ; sinon le ratio vaut 0 et seuls les seuils absolus
-  de dépassement déterminent le niveau.
-
-Puis, dans cet ordre :
-
-* `CRITIQUE` si `ratio_plage_pct >= ALERTE_CRITIQUE_RATIO_PCT`
-              **ou** `depassement   >= ALERTE_CRITIQUE_DEPASSEMENT`
-* `MAJEURE`   si `ratio_plage_pct >= ALERTE_MAJEURE_RATIO_PCT`
-              **ou** `depassement   >= ALERTE_MAJEURE_DEPASSEMENT`
-* `MINEURE`   sinon.
-
-Les quatre seuils viennent de `core/settings.py` (donc de l'environnement) :
-modifier la logique de gravité ne demande **aucun changement de code**.
-
-`INFORMATION` existe dans le modèle pour un usage futur ; aucune règle de
-seuil ne le produit dans ce sprint.
-
-── Anti-duplication ───────────────────────────────────────────────────────────
-
-Une seule alerte **ouverte** (ACTIVE ou ACKNOWLEDGED) par capteur et par
-direction. Conséquences :
-
-* 10:00 → 105 °C → *alerte créée* ;
-* 10:01 → 106 °C → *aucune nouvelle alerte*, `nb_occurrences` incrémenté,
-  `derniere_valeur` / `derniere_occurrence` mises à jour ;
-* 10:02 → 107 °C → idem.
-
-L'alerte reste ouverte jusqu'au traitement. Si la situation s'aggrave
-(ex. la valeur monte et change de niveau), le **niveau est escaladé sur
-l'alerte existante** — on ne crée pas de doublon, et on ne renvoie pas de
-notification (anti-spam).
-
-Retour à la normale : toutes les alertes ouvertes du capteur passent en
-`RESOLVED` avec `date_resolution` + motif, **et** une unique notification
-« Retour à la normale » est envoyée. Le cycle suivant repart d'une alerte
-neuve, sans spam.
-
-La garantie est aussi posée en base : contrainte unique partielle
-`alerte_unique_ouverte_par_capteur` sur `(capteur, type_alerte)` filtrée
-sur `statut IN (ACTIVE, ACKNOWLEDGED)`.
-"""
 from __future__ import annotations
 
 import logging
@@ -79,14 +12,10 @@ logger = logging.getLogger(__name__)
 STATUTS_OUVERTS = (Alerte.Statut.ACTIVE, Alerte.Statut.ACKNOWLEDGED)
 
 
-# ── UC-26 — Règles d'alerte (seuils existants du capteur) ───────────────────
+# Règles d'alerte (seuils existants du capteur)
 
 def evaluer_seuil(valeur, seuil_min, seuil_max) -> dict | None:
-    """Retourne le dépassement constaté, ou ``None`` si la valeur est normale.
 
-    Le retour contient ``type_alerte``, ``seuil``, ``depassement`` et
-    ``ratio_plange_pct`` — tout ce dont le niveau a besoin.
-    """
     if seuil_min is not None and valeur < seuil_min:
         seuil = seuil_min
         type_alerte = Alerte.TypeAlerte.SEUIL_MIN
@@ -107,10 +36,10 @@ def evaluer_seuil(valeur, seuil_min, seuil_max) -> dict | None:
     }
 
 
-# ── UC-27 — Niveaux (règle explicite, sans IA) ───────────────────────────────
+#  Niveaux (règle explicite, sans IA)
 
 def determiner_niveau(depassement, ratio_plage_pct) -> str:
-    """Applique la règle de gravité décrite dans la docstring du module."""
+   
     if (
         ratio_plage_pct >= settings.ALERTE_CRITIQUE_RATIO_PCT
         or depassement >= settings.ALERTE_CRITIQUE_DEPASSEMENT
@@ -125,7 +54,7 @@ def determiner_niveau(depassement, ratio_plage_pct) -> str:
 
 
 def niveau_plus_grave(niveau_a, niveau_b) -> str:
-    """Compare deux niveaux via l'ordre de gravité croissant."""
+    
     return niveau_a if ORDRE_NIVEAUX.index(niveau_a) >= ORDRE_NIVEAUX.index(niveau_b) else niveau_b
 
 
@@ -137,14 +66,10 @@ def construire_message(capteur, type_alerte, valeur, seuil, unite) -> str:
     )
 
 
-# ── Génération automatique ──────────────────────────────────────────────────
-
+#  Génération automatique 
 @transaction.atomic
 def evaluer_lecture(reading) -> dict:
-    """Évalue une mesure et met à jour les alertes du capteur.
-
-    Ne lève jamais d'exception métier : renvoie un rapport exploitable.
-    """
+  
     capteur = reading.sensor
 
     if reading.interpolation:
@@ -164,7 +89,7 @@ def evaluer_lecture(reading) -> dict:
 
 
 def _ouvrir_ou_incrementer(capteur, reading, depassement) -> dict:
-    """Une alerte ouverte par (capteur, direction) : on incrémente, sinon on crée."""
+    
     niveau = determiner_niveau(depassement['depassement'], depassement['ratio_plage_pct'])
 
     # `select_for_update` sérialise les ingérations concurrentes sur un même
@@ -240,7 +165,7 @@ def _ouvrir_ou_incrementer(capteur, reading, depassement) -> dict:
 
 
 def _resoudre_si_normal(capteur, reading) -> dict:
-    """Retour à la normale : clôt les alertes ouvertes, sans spam."""
+   
     if not getattr(settings, 'ALERTE_RESOLUTION_AUTO', True):
         return {'action': 'aucune'}
 
