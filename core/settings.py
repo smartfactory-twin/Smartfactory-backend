@@ -300,7 +300,6 @@ DEFAULT_FROM_EMAIL = formataddr((EMAIL_DISPLAY_NAME, config('DEFAULT_FROM_EMAIL'
 
 # ─── Frontend URL (liens de réinitialisation) ─────────────────────────────────
 FRONTEND_URL = config('FRONTEND_URL', default='http://localhost:3000')
-GOOGLE_OAUTH_CLIENT_ID = config('GOOGLE_OAUTH_CLIENT_ID', default='')
 
 # ─── Logo base64 pour les emails ─────────────────────────────────────────────
 import base64 as _b64, os as _os

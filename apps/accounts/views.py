@@ -21,7 +21,6 @@ import string
 
 from .serializers import (
     CustomTokenObtainPairSerializer,
-    GoogleLoginSerializer,
     RegisterSerializer,
     UserSerializer,
     PasswordResetSerializer,
@@ -315,93 +314,6 @@ class LoginView(TokenObtainPairView):
                 status=status.HTTP_401_UNAUTHORIZED
             )
         return Response(serializer.validated_data, status=status.HTTP_200_OK)
-
-
-class GoogleLoginView(APIView):
-
-    permission_classes = [AllowAny]
-    throttle_classes = [LoginThrottle]
-
-    def post(self, request):
-        if not settings.GOOGLE_OAUTH_CLIENT_ID:
-            return Response(
-                {'error': 'La connexion Google n’est pas configurée sur le serveur.'},
-                status=status.HTTP_503_SERVICE_UNAVAILABLE,
-            )
-
-        serializer = GoogleLoginSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-
-        try:
-            from google.auth.exceptions import TransportError
-            from google.auth.transport.requests import Request as GoogleRequest
-            from google.oauth2 import id_token
-
-            claims = id_token.verify_oauth2_token(
-                serializer.validated_data['credential'],
-                GoogleRequest(),
-                settings.GOOGLE_OAUTH_CLIENT_ID,
-            )
-        except ValueError:
-            return Response({'error': 'Le jeton Google est invalide ou expiré.'}, status=status.HTTP_401_UNAUTHORIZED)
-        except TransportError as exc:
-            logger.warning('Vérification Google indisponible (%s).', type(exc).__name__)
-            return Response({'error': 'La vérification Google est temporairement indisponible.'}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
-        except Exception as exc:  # Fail closed; do not expose token or provider details.
-            logger.warning('Échec de vérification Google (%s).', type(exc).__name__)
-            return Response({'error': 'Impossible de vérifier la connexion Google.'}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
-
-        subject = claims.get('sub')
-        email = (claims.get('email') or '').strip().lower()
-        email_verified = claims.get('email_verified') is True
-        hosted_domain = claims.get('hd')
-        is_authoritative_email = email.endswith('@gmail.com') or bool(hosted_domain)
-        if not subject or not email or not email_verified or not is_authoritative_email:
-            return Response(
-                {'error': 'Google doit fournir un e-mail vérifié Gmail ou Google Workspace.'},
-                status=status.HTTP_401_UNAUTHORIZED,
-            )
-
-        try:
-            with transaction.atomic():
-                user = User.objects.select_for_update().filter(google_sub=subject).first()
-                if user is None:
-                    user = User.objects.select_for_update().filter(email=email).first()
-                if user is None:
-                    return Response(
-                        {'error': 'Aucun compte SmartFactory actif ne correspond à cet e-mail. Contactez un administrateur.'},
-                        status=status.HTTP_403_FORBIDDEN,
-                    )
-                if not user.actif:
-                    return Response({'error': 'Ce compte est inactif. Contactez un administrateur.'}, status=status.HTTP_403_FORBIDDEN)
-                if user.must_reset_password:
-                    return Response({'error': 'Terminez d’abord la première connexion avec votre mot de passe temporaire.'}, status=status.HTTP_403_FORBIDDEN)
-                if user.google_sub and user.google_sub != subject:
-                    return Response({'error': 'Cet e-mail est déjà associé à une autre identité Google.'}, status=status.HTTP_403_FORBIDDEN)
-
-                if user.google_sub != subject:
-                    user.google_sub = subject
-                    user.last_login = timezone.now()
-                    user.save(update_fields=['google_sub', 'last_login'])
-                else:
-                    user.last_login = timezone.now()
-                    user.save(update_fields=['last_login'])
-
-                refresh = CustomTokenObtainPairSerializer.get_token(user)
-                return Response({
-                    'refresh': str(refresh),
-                    'access': str(refresh.access_token),
-                    'user': {
-                        'id': user.id,
-                        'nom': user.nom,
-                        'prenom': user.prenom,
-                        'email': user.email,
-                        'role': user.role,
-                        'role_label': user.get_role_display(),
-                    },
-                }, status=status.HTTP_200_OK)
-        except IntegrityError:
-            return Response({'error': 'Cette identité Google est déjà associée à un autre compte.'}, status=status.HTTP_403_FORBIDDEN)
 
 
 

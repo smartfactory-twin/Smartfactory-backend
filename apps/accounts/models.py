@@ -30,10 +30,6 @@ class Utilisateur(AbstractBaseUser, PermissionsMixin):
     nom = models.CharField(max_length=100, verbose_name='Nom')
     prenom = models.CharField(max_length=100, verbose_name='Prénom')
     email = models.EmailField(unique=True, verbose_name='Adresse email')
-    google_sub = models.CharField(
-        max_length=255, unique=True, null=True, blank=True,
-        editable=False, verbose_name='Identifiant Google',
-    )
     role = models.CharField(
         max_length=20,
         choices=Role.choices,
