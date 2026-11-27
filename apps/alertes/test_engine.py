@@ -20,7 +20,7 @@ from apps.equipements.models import Machine, Reading, Sensor
 def test_legacy_complete_threshold_detection_is_unchanged(
     value, expected_type, expected_threshold, expected_excess, expected_ratio,
 ):
-    """Capteurs existants avec min/max : mêmes comparaisons strictes et ratio de plage."""
+    
     result = evaluer_seuil(value, seuil_min=10, seuil_max=90)
 
     if expected_type is None:

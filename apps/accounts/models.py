@@ -3,7 +3,6 @@ from django.db import models
 
 
 class UtilisateurManager(BaseUserManager):
-    """Manager personnalisé pour le modèle Utilisateur."""
 
     def create_user(self, email: str, password: str, **extra_fields):
         if not email:
@@ -23,12 +22,6 @@ class UtilisateurManager(BaseUserManager):
 
 
 class Utilisateur(AbstractBaseUser, PermissionsMixin):
-    """
-    Modèle utilisateur personnalisé pour SmartFactory Twin.
-    Connexion par EMAIL (pas username).
-    3 rôles : ADMIN, TECHNICIEN, OPERATEUR.
-    """
-
     class Role(models.TextChoices):
         ADMIN = 'ADMIN', 'Administrateur'
         TECHNICIEN = 'TECHNICIEN', 'Technicien'
@@ -94,12 +87,6 @@ class Utilisateur(AbstractBaseUser, PermissionsMixin):
 
 
 class AuditLog(models.Model):
-    """Journal non modifiable des changements et de leur résultat.
-
-    Request bodies and credentials are intentionally never stored. `acteur_email`
-    and `acteur_role` are snapshots so the record remains attributable if the
-    corresponding user is later disabled or removed.
-    """
 
     acteur = models.ForeignKey(
         'accounts.Utilisateur', null=True, blank=True, on_delete=models.SET_NULL,
@@ -126,8 +113,7 @@ class AuditLog(models.Model):
         return f'{self.action} — {self.acteur_email or "anonyme"} — {self.cree_le:%Y-%m-%d %H:%M:%S}'
 
     @property
-    def is_temp_password_expired(self):
-        """Vérifie si le mot de passe temporaire a dépassé le délai de 48 heures."""
+    def is_temp_password_expired(self):  
         if self.must_reset_password and self.date_joined:
             from django.utils import timezone
             from datetime import timedelta
@@ -136,7 +122,6 @@ class AuditLog(models.Model):
 
 
 class VocalCommand(models.Model):
-    """Journal texte des commandes vocales (aucun enregistrement audio)."""
     utilisateur = models.ForeignKey(
         'accounts.Utilisateur', on_delete=models.CASCADE, related_name='commandes_vocales'
     )

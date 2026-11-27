@@ -1,24 +1,3 @@
-"""Module 8 — Abstraction des canaux de notification (UC-28).
-
-`NotificationService` isole l'alerte du *comment* on prévient :
-
-    notify_in_app()  → toujours disponible, sans dépendance externe
-    notify_email()   → activable/désactivable par la configuration
-    notify_sms()     → Twilio OPTIONNEL, architectural uniquement
-
-Contraintes tenues par ce module :
-
-* `dispatch()` **ne lève jamais** : une alerte est créée quoi qu'il arrive,
-  et un canal en échec n'empêche pas les autres ;
-* aucun identifiant SMTP en dur, tout vient de `settings` / environnement ;
-* sans configuration email, on journalise clairement et on continue ;
-* le filtrage des destinataires réutilise `accessible_machine_ids()`
-  (source de vérité `UserScope`) — aucune logique de périmètre dupliquée.
-
-WebSocket : aucun serveur temps réel n'existe dans le projet. `dispatch()`
-est le point d'accroche prévu pour y diffuser plus tard (voir §8 du cahier
-des charges) sans rien changer au reste du module.
-"""
 from __future__ import annotations
 
 import logging
@@ -32,12 +11,11 @@ logger = logging.getLogger(__name__)
 
 
 class NotificationService:
-    """Point d'entrée unique de diffusion d'une alerte."""
-
+   
     EVENEMENT_CREATION = 'CREATION'
     EVENEMENT_RETOUR_NORMALE = 'RETOUR_NORMALE'
 
-    # ── Diffusion ──────────────────────────────────────────────────────────
+    # Diffusion
 
     @classmethod
     def dispatch(cls, alerte, evenement=EVENEMENT_CREATION, destinataires=None) -> dict:
@@ -88,24 +66,18 @@ class NotificationService:
                 cls.telephones(destinataires), alerte,
             ) if (settings.ALERTE_NOTIFICATIONS_SMS and evenement == cls.EVENEMENT_CREATION) else 0
 
-        except Exception:  # pragma: no cover - filet de sécurité
+        except Exception:  
             logger.exception(
-                'Module 8 — échec de la diffusion des notifications pour l\'alerte %s.',
+                ' échec de la diffusion des notifications pour l\'alerte %s.',
                 alerte.pk,
             )
 
         return rapport
 
-    # ── Destinataires (périmètre = UserScope, source de vérité) ─────────────
 
     @staticmethod
     def destinataires_pour_machine(machine):
-        """Utilisateurs actifs dont le périmètre `UserScope` ouvre `machine`.
-
-        Les `ADMIN` reçoivent les notifications sans filtre de périmètre ;
-        techniciens et opérateurs sont filtrés par
-        `equipements.permissions.accessible_machine_ids()`.
-        """
+        
         from apps.accounts.models import Utilisateur
 
         accessibles = []
@@ -128,7 +100,6 @@ class NotificationService:
 
     @staticmethod
     def preference(utilisateur) -> PreferenceNotification:
-        """Préférence de l'utilisateur, créée par défaut au premier envoi."""
         preference, _ = PreferenceNotification.objects.get_or_create(utilisateur=utilisateur)
         return preference
 
@@ -139,7 +110,7 @@ class NotificationService:
         except ValueError:
             return True
 
-    # ── Canal In-App ───────────────────────────────────────────────────────
+    # Canal In-App
 
     @staticmethod
     def notify_in_app(utilisateur, alerte, evenement=EVENEMENT_CREATION) -> bool:
@@ -176,7 +147,7 @@ class NotificationService:
         except IntegrityError:
             return False
 
-    # ── Canal Email ────────────────────────────────────────────────────────
+    # Canal Email
 
     @staticmethod
     def smtp_configure() -> bool:
@@ -190,10 +161,7 @@ class NotificationService:
 
     @classmethod
     def notify_email(cls, destinataires, alerte) -> bool:
-        """Envoie l'alerte par email. Ne lève jamais.
-
-        Retourne ``True`` seulement si l'envoi a abouti.
-        """
+  
         destinataires = [d for d in (destinataires or []) if d]
         if not destinataires:
             return False
@@ -252,7 +220,7 @@ class NotificationService:
 
     @classmethod
     def _notifier_destinataires_config(cls, alerte, evenement) -> int:
-        """Destinataires de repli (configuration serveur), event CREATION seul."""
+        
         if evenement != cls.EVENEMENT_CREATION or not settings.ALERTE_NOTIFICATIONS_EMAIL:
             return 0
         if ORDRE_NIVEAUX.index(alerte.niveau) < ORDRE_NIVEAUX.index(settings.ALERTE_EMAIL_NIVEAU_MIN):
@@ -260,15 +228,11 @@ class NotificationService:
         adresses = [a.strip() for a in settings.ALERTE_NOTIFY_EMAILS if a.strip()]
         return 1 if adresses and cls.notify_email(adresses, alerte) else 0
 
-    # ── Canal SMS (Twilio) — architecture uniquement ───────────────────────
+    # Canal SMS (Twilio) — architecture uniquement─
 
     @staticmethod
     def notify_sms(numeros, alerte) -> int:
-        """Canal SMS : PRÊT POUR UNE INTÉGRATION TWILIO FUTURE, NON ACTIVÉ.
-
-        Twilio est optionnel : sans configuration, aucun SMS n'est envoyé et
-        aucune erreur n'est levée. Le Module 8 ne dépend pas de ce canal.
-        """
+        
         numeros = [n for n in (numeros or []) if n]
         if not numeros or not settings.ALERTE_NOTIFICATIONS_SMS:
             return 0

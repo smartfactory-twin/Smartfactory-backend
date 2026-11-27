@@ -1,4 +1,3 @@
-"""Readiness indicators for training machine-learning models from sensor history."""
 from django.conf import settings
 from django.db.models import Count, Max, Min, Q
 from rest_framework.permissions import BasePermission, IsAuthenticated

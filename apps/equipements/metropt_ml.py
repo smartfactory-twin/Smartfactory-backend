@@ -1,9 +1,3 @@
-"""MetroPT-3 benchmark: unsupervised anomaly detection on reported failures.
-
-The downloaded Group 14 CSV is a cleaned derivative, not the raw UCI release.
-The derivative's ``status`` column is deliberately ignored: evaluation labels
-come from the four failure intervals published in the UCI dataset description.
-"""
 from __future__ import annotations
 
 import csv

@@ -6,6 +6,7 @@ import pytest
 from django.core.cache import cache
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import override_settings
+from django.utils import timezone
 from rest_framework.test import APIClient
 from rest_framework_simplejwt.tokens import RefreshToken
 
@@ -178,7 +179,7 @@ def test_stream_uses_read_only_proposal_and_never_executes_confirmation(voice_us
         parametres={'commentaire': 'pièce remplacée'}, parametres_hash='x',
         resume='Acquitter alerte.', apercu={'alerte': f'AL-{alert.pk:06d}'},
         spoken_summary='Acquitter alerte. Dites confirme ou annule.',
-        expires_at='2026-11-23T00:00:00Z',
+        expires_at=timezone.now() + timezone.timedelta(minutes=2),
     )
     fake = ScriptedStreamingLLM()
     monkeypatch.setattr('apps.voice.views.get_llm_client', lambda: fake)

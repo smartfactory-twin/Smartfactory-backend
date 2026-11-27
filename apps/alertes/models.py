@@ -1,28 +1,9 @@
-"""Module 8 — Alertes & Notifications
-
-Aucun seuil n'est stocké ici : les règles d'alerte s'appuient **exclusivement**
-sur `Sensor.seuil_min` / `Sensor.seuil_max` (Module 3), qui restent la source de
-vérité et sont déjà éditables via l'API capteurs.
-
-Trois objets :
-
-* `Alerte`               — l'évènement de dépassement de seuil (historisé) ;
-* `Notification`         — la notification In-App de l'utilisateur ;
-* `PreferenceNotification` — les canaux de notification choisis (UC-28).
-"""
 from django.db import models
-# L'ordre de ce tuple définit la gravité croissante : il sert à comparer deux
-# niveaux (escalade d'une alerte ouverte).
+
 ORDRE_NIVEAUX = ('INFORMATION', 'MINEURE', 'MAJEURE', 'CRITIQUE')
 
 
 class Alerte(models.Model):
-    """Une alerte déclenchée par une mesure hors plage.
-
-    **Jamais supprimée** (l'historique fait partie du module) : la levée se
-    passe par `resoudre()`, qui conserve la ligne et ses horodatages.
-    """
-
     class Niveau(models.TextChoices):
         INFORMATION = 'INFORMATION', 'Information'
         MINEURE = 'MINEURE', 'Mineure'
@@ -39,7 +20,6 @@ class Alerte(models.Model):
         SEUIL_MAX = 'SEUIL_MAX', 'Seuil maximum dépassé'
         # Réservé : aucun code ne produit ce type dans ce sprint. La colonne
         # `anomalie_ia_score` + ce type préparent l'intégration IA future
-        # (UC-26 « seuil sur le score d'anomalie ») sans aucun modèle IA.
         ANOMALIE_IA = 'ANOMALIE_IA', 'Anomalie IA (réservé)'
 
     reference = models.CharField(
@@ -73,7 +53,7 @@ class Alerte(models.Model):
         default=Statut.ACTIVE, verbose_name="Statut",
     )
 
-    # ── Mesure / seuil au moment du déclenchement ───────────────────────────
+    # Mesure / seuil au moment du déclenchement 
     valeur = models.FloatField(verbose_name="Valeur mesurée")
     seuil = models.FloatField(verbose_name="Seuil concerné")
     unite = models.CharField(max_length=50, blank=True, default='', verbose_name="Unité")
@@ -93,7 +73,7 @@ class Alerte(models.Model):
         null=True, blank=True, verbose_name="Score d'anomalie IA (réservé)",
     )
 
-    # ── Anti-duplication ────────────────────────────────────────────────────
+    #  Anti-duplication 
     nb_occurrences = models.PositiveIntegerField(
         default=1, verbose_name="Nombre d'occurrences",
     )
@@ -104,7 +84,7 @@ class Alerte(models.Model):
 
     date_declenchement = models.DateTimeField(verbose_name="Déclenchée le")
 
-    # ── Acquittement (UC-29) ────────────────────────────────────────────────
+    #  Acquittement 
     date_acquittement = models.DateTimeField(null=True, blank=True, verbose_name="Acquittée le")
     acquittee_par = models.ForeignKey(
         'accounts.Utilisateur', on_delete=models.SET_NULL,
@@ -115,7 +95,7 @@ class Alerte(models.Model):
         blank=True, default='', verbose_name="Commentaire d'acquittement",
     )
 
-    # ── Résolution ──────────────────────────────────────────────────────────
+    #  Résolution 
     date_resolution = models.DateTimeField(null=True, blank=True, verbose_name="Résolue le")
     message_resolution = models.TextField(blank=True, default='', verbose_name="Motif de résolution")
 
@@ -146,9 +126,9 @@ class Alerte(models.Model):
     def __str__(self):
         return f'{self.reference or f"AL-{self.pk}"} — {self.machine_id} — {self.get_niveau_display()}'
 
-    # ── Sauvegarde ──────────────────────────────────────────────────────────
+    #  Sauvegarde 
     def save(self, *args, **kwargs):
-        """Attribue la référence `AL-000123` après l'INSERT (pk nécessaire)."""
+       
         if not self.reference and self.pk is None:
             super().save(*args, **kwargs)
             self.reference = f'AL-{self.pk:06d}'
@@ -156,10 +136,10 @@ class Alerte(models.Model):
         else:
             super().save(*args, **kwargs)
 
-    # ── Aides ───────────────────────────────────────────────────────────────
+    #  Aides
     @property
     def est_ouverte(self):
-        """Une alerte reste « ouverte » jusqu'à sa résolution."""
+       
         return self.statut in (self.Statut.ACTIVE, self.Statut.ACKNOWLEDGED)
 
     @property
@@ -171,7 +151,7 @@ class Alerte(models.Model):
         return ORDRE_NIVEAUX.index(self.niveau)
 
     def acquitter(self, utilisateur, commentaire):
-        """Passage en ACKNOWLEDGED. Le commentaire est obligatoire (§13)."""
+        
         from django.utils import timezone
 
         commentaire = (commentaire or '').strip()
@@ -191,7 +171,7 @@ class Alerte(models.Model):
         Notification.objects.filter(alerte=self).delete()
 
     def resoudre(self, motif=''):
-        """Clôture de l'alerte (retour à la normale ou action manuelle)."""
+        
         from django.utils import timezone
 
         if self.statut == self.Statut.RESOLVED:
@@ -204,7 +184,7 @@ class Alerte(models.Model):
 
 
 class Notification(models.Model):
-    """Notification In-App d'un utilisateur (UC-28)."""
+   
 
     class Type(models.TextChoices):
         ALERTE_CREEE = 'ALERTE_CREEE', 'Alerte créée'
@@ -264,11 +244,6 @@ class Notification(models.Model):
 
 
 class PreferenceNotification(models.Model):
-    """Canaux de notification choisis par l'utilisateur (UC-28).
-
-    Les clés globales (`ALERTE_NOTIFICATIONS_*`) restent prioritaires :
-    une préférence ne peut pas activer un canal coupé par la configuration.
-    """
 
     utilisateur = models.OneToOneField(
         'accounts.Utilisateur', on_delete=models.CASCADE,

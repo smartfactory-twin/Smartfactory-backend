@@ -8,8 +8,7 @@ from .permissions import accessible_machine_ids
 
 
 class ReadingConsumer(AsyncJsonWebsocketConsumer):
-    """Flux d'un capteur, authentifié par le JWT d'accès en query string."""
-
+    
     async def connect(self):
         self.sensor_id = self.scope['url_route']['kwargs']['sensor_id']
         token = self.scope['query_string'].decode().split('token=', 1)[-1].split('&', 1)[0]

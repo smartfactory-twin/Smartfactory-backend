@@ -5,7 +5,6 @@ User = get_user_model()
 
 
 class IsAdmin(BasePermission):
-    """Autorise uniquement les Administrateurs (rôle ADMIN)."""
     message = 'Accès réservé aux Administrateurs.'
 
     def has_permission(self, request, view):

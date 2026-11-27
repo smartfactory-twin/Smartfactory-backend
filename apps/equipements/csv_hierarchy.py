@@ -83,7 +83,6 @@ VALID_STATUTS = [s[0] for s in Machine.Statut.choices]
 
 
 def parse_csv_file(file_obj):
-    """Lit et décode un fichier CSV avec détection d'encodage et de délimiteur."""
     raw = file_obj.read()
     content = None
     for enc in ('utf-8-sig', 'utf-8', 'latin1', 'cp1252'):
@@ -104,7 +103,7 @@ def parse_csv_file(file_obj):
 
 
 def normalize_row(raw_row):
-    """Normalise les noms de colonnes et les valeurs d'une ligne CSV."""
+    
     normalized = {}
     for k, v in raw_row.items():
         if k is None:
@@ -117,10 +116,7 @@ def normalize_row(raw_row):
 
 
 def validate_and_parse_hierarchy_csv(file_obj):
-    """
-    Parse et valide le CSV de hiérarchie complète.
-    Retourne (valid_rows, invalid_rows, errors, summary, preview_items).
-    """
+    
     reader = parse_csv_file(file_obj)
     valid_rows = []
     invalid_rows = []
@@ -245,10 +241,7 @@ def validate_and_parse_hierarchy_csv(file_obj):
 
 
 def execute_hierarchy_import(valid_rows):
-    """
-    Exécute l'insertion / mise à jour de la hiérarchie dans la base de données.
-    Réutilise les Usines, Zones, Lignes et Machines existantes.
-    """
+   
     stats = {
         'usines_created': 0,
         'usines_reused': 0,
@@ -272,7 +265,7 @@ def execute_hierarchy_import(valid_rows):
             usine_adresse = row.get('usine_adresse', '')
             usine_desc = row.get('usine_description', '')
 
-            # ── 1. Usine ──────────────────────────────────────────────────────
+            #  Usine 
             if usine_nom not in cache_usines:
                 usine, created = Usine.objects.get_or_create(
                     nom=usine_nom,
@@ -295,7 +288,7 @@ def execute_hierarchy_import(valid_rows):
             else:
                 usine = cache_usines[usine_nom]
 
-            # ── 2. Zone ───────────────────────────────────────────────────────
+            #  Zone
             zone_nom = row.get('zone_nom', '')
             zone_desc = row.get('zone_description', '')
             zone = None
@@ -318,7 +311,7 @@ def execute_hierarchy_import(valid_rows):
                 else:
                     zone = cache_zones[zone_key]
 
-            # ── 3. Ligne ──────────────────────────────────────────────────────
+            #  Ligne
             ligne_nom = row.get('ligne_nom', '')
             ligne_desc = row.get('ligne_description', '')
             ligne = None

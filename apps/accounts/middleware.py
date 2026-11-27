@@ -1,4 +1,3 @@
-"""Audit successful and rejected API mutations without retaining payloads."""
 import logging
 
 from django.utils.deprecation import MiddlewareMixin
@@ -7,11 +6,6 @@ logger = logging.getLogger(__name__)
 
 
 class ApiAuditMiddleware(MiddlewareMixin):
-    """Record API writes (POST/PUT/PATCH/DELETE), including failed attempts.
-
-    The request body is deliberately excluded because it may contain passwords,
-    tokens, personal data, or uploaded file metadata.
-    """
 
     METHODS = {'POST', 'PUT', 'PATCH', 'DELETE'}
 

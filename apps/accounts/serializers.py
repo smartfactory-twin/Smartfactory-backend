@@ -35,7 +35,6 @@ class AuditLogSerializer(serializers.ModelSerializer):
         read_only_fields = fields
 
 class UserSerializer(serializers.ModelSerializer):
-    """Sérialiseur de base pour les infos utilisateur (sans le mot de passe)."""
 
     role_label = serializers.CharField(source='get_role_display', read_only=True)
     photo = serializers.SerializerMethodField()
@@ -47,14 +46,12 @@ class UserSerializer(serializers.ModelSerializer):
         read_only_fields = ['id', 'date_joined', 'must_reset_password']
 
     def get_photo(self, obj):
-        """Retourne l'URL relative de la photo (le proxy Vite /media → localhost:8000/media)."""
         if not obj.photo:
             return None
         return obj.photo.url  # ex: /media/profiles/photo.jpg
 
 
 class RegisterSerializer(serializers.ModelSerializer):
-    """Inscription d'un nouvel utilisateur."""
 
     password = serializers.CharField(
         write_only=True, required=True,
@@ -90,7 +87,6 @@ class RegisterSerializer(serializers.ModelSerializer):
 
 
 class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
-    """JWT login — retourne access + refresh + infos utilisateur."""
 
     def validate(self, attrs):
         from django.contrib.auth import authenticate
@@ -130,20 +126,16 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
 
 
 class GoogleLoginSerializer(serializers.Serializer):
-    """Reçoit le jeton d'identité Google sans jamais le journaliser."""
-
     credential = serializers.CharField(write_only=True, trim_whitespace=True, max_length=8192)
 
 
 class PasswordResetSerializer(serializers.Serializer):
-    """Demande de réinitialisation de mot de passe."""
 
     email = serializers.EmailField(required=True)
 
 
 class PasswordResetConfirmSerializer(serializers.Serializer):
-    """Confirmation de réinitialisation de mot de passe."""
-
+ 
     uid = serializers.CharField(required=True)
     token = serializers.CharField(required=True)
     new_password = serializers.CharField(
@@ -178,14 +170,12 @@ class PasswordResetConfirmSerializer(serializers.Serializer):
 
 
 class LogoutSerializer(serializers.Serializer):
-    """Corps de la requête de déconnexion : le refresh token à révoquer."""
-
+  
     refresh = serializers.CharField(required=True)
 
 
 class AdminUserCreateSerializer(serializers.ModelSerializer):
-    """Création d'un utilisateur par un ADMIN (mot de passe généré automatiquement)."""
-
+  
     class Meta:
         model = User
         fields = ['nom', 'prenom', 'email', 'role']
@@ -195,8 +185,6 @@ class AdminUserCreateSerializer(serializers.ModelSerializer):
 
 
 class AdminUserListSerializer(serializers.ModelSerializer):
-    """Sérialiseur lecture pour la liste des utilisateurs (ADMIN)."""
-
     role_label = serializers.CharField(source='get_role_display', read_only=True)
 
     class Meta:
@@ -208,7 +196,6 @@ class AdminUserListSerializer(serializers.ModelSerializer):
 
 
 class UpdateProfileSerializer(serializers.ModelSerializer):
-    """Mise à jour du profil utilisateur connecté (nom, prénom, téléphone, photo)."""
 
     photo = serializers.ImageField(required=False, allow_null=True)
 
@@ -227,7 +214,6 @@ class UpdateProfileSerializer(serializers.ModelSerializer):
         return value.strip()
 
     def validate_telephone(self, value: str) -> str:
-        """Validation souple : chiffres, espaces, +, tirets, parenthèses autorisés."""
         import re
         cleaned = value.strip()
         if cleaned and not re.match(r'^[\d\s\+\-\(\)]{6,20}$', cleaned):
@@ -238,7 +224,6 @@ class UpdateProfileSerializer(serializers.ModelSerializer):
 
 
 class ChangePasswordSerializer(serializers.Serializer):
-    """Changement de mot de passe direct (sans token) pour un utilisateur connecté."""
 
     current_password = serializers.CharField(
         write_only=True, required=True,

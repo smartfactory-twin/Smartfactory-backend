@@ -1,6 +1,8 @@
 import pytest
 import io
 import csv
+from django.db import connection
+from django.test.utils import CaptureQueriesContext
 from rest_framework.test import APIClient
 from apps.accounts.models import Utilisateur
 from apps.equipements.models import Usine, Zone, LigneProduction, Machine, Composant, UserScope
@@ -449,6 +451,32 @@ class TestComposantAPI:
 @pytest.mark.django_db
 class TestHierarchie:
     """Tests de la hiérarchie complète : Usine → Zone → Ligne → Machine → Composant."""
+
+    def test_hierarchie_prefetches_nested_data_in_a_bounded_number_of_queries(
+        self, api_client, admin_user, machine,
+    ):
+        usine = machine.ligne_production.zone.usine
+        for zone_index in range(3):
+            zone = Zone.objects.create(nom=f'Zone perf {zone_index}', usine=usine)
+            for line_index in range(2):
+                line = LigneProduction.objects.create(
+                    nom=f'Ligne perf {zone_index}-{line_index}', zone=zone,
+                )
+                for machine_index in range(2):
+                    item = Machine.objects.create(
+                        nom=f'Machine perf {zone_index}-{line_index}-{machine_index}',
+                        identifiant_interne=f'PERF-HIER-{zone_index}-{line_index}-{machine_index}',
+                        ligne_production=line,
+                    )
+                    Composant.objects.create(nom='Composant perf', machine=item)
+
+        api_client.force_authenticate(admin_user)
+        with CaptureQueriesContext(connection) as queries:
+            response = api_client.get(f'/api/equipements/usines/{usine.id}/hierarchie/')
+
+        assert response.status_code == 200
+        assert len(response.data['zones']) == 4
+        assert len(queries) <= 5
 
     def test_hierarchie_complete(self, api_client, admin_user, machine):
         """Vérifie que la hiérarchie complète est bien accessible."""

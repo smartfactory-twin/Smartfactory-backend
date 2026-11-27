@@ -3,13 +3,13 @@ from channels.layers import get_channel_layer
 
 
 def on_reading_created(sender, instance, created, raw=False, **kwargs):
-    """Publie les nouvelles mesures créées, sans diffuser les fixtures brutes."""
+    
     if created and not raw:
         publish_reading(instance)
 
 
 def publish_reading(reading):
-    """Diffuse une nouvelle mesure aux clients autorisés abonnés au capteur."""
+  
     channel_layer = get_channel_layer()
     if channel_layer is None:
         return

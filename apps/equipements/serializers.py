@@ -15,15 +15,11 @@ from .readings_io import normalize_timestamp
 
 
 class UsineSerializer(serializers.ModelSerializer):
-    zones_count = serializers.SerializerMethodField()
+    zones_count = serializers.IntegerField(read_only=True)
 
     class Meta:
         model = Usine
         fields = ['id', 'nom', 'adresse', 'description', 'zones_count', 'created_at', 'updated_at']
-
-    def get_zones_count(self, obj):
-        return obj.zones.count()
-
 
 class ZoneSerializer(serializers.ModelSerializer):
     usine_nom    = serializers.CharField(source='usine.nom', read_only=True)

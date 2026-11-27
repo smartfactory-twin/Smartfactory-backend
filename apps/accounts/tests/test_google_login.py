@@ -35,7 +35,7 @@ class TestGoogleLogin:
 
     @override_settings(GOOGLE_OAUTH_CLIENT_ID=CLIENT_ID)
     @pytest.mark.parametrize('claims', [
-        {'sub': 's', 'email': 'person@gmail.com', 'email_verified': True},
+        {'email': 'person@gmail.com', 'email_verified': True},
         {'sub': 's', 'email': 'person@gmail.com', 'email_verified': False},
         {'sub': 's', 'email': 'person@unverified.example', 'email_verified': True},
     ], ids=['expired-or-incomplete-claims', 'email-not-verified', 'non-gmail-without-workspace-domain'])
