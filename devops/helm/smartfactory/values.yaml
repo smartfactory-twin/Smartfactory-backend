@@ -1,0 +1,87 @@
+config:
+  debug: "False"
+  allowedHosts: "*"
+  db:
+    name: smartfactory_db
+    user: smartfactory
+    host: postgres
+    port: "5432"
+
+secret:
+  existingName: backend-secret
+
+backend:
+  replicas: 3
+  image:
+    repository: smartfactory-backend
+    tag: "1.0"
+    pullPolicy: Never
+  service:
+    name: backend
+    portName: http
+    port: 8000
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+
+frontend:
+  replicas: 1
+  image:
+    repository: smartfactory-frontend
+    tag: "1.0"
+    pullPolicy: Never
+  service:
+    name: frontend
+    portName: http
+    port: 80
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 300m
+      memory: 256Mi
+
+postgres:
+  image:
+    repository: postgres
+    tag: "16"
+    pullPolicy: IfNotPresent
+  service:
+    name: postgres
+    port: 5432
+  persistence:
+    claimName: postgres-pvc
+    size: 1Gi
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 1Gi
+
+persistence:
+  media:
+    claimName: media-pvc
+    size: 1Gi
+  mlArtifacts:
+    claimName: ml-artifacts-pvc
+    size: 1Gi
+
+migrations:
+  enabled: true
+  backoffLimit: 3
+
+ingress:
+  enabled: true
+  name: smartfactory
+  className: nginx
+  host: ""
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
