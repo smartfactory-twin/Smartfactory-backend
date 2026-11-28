@@ -1,0 +1,57 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: backend-config
+  namespace: {{ .Release.Namespace }}
+data:
+  DEBUG: {{ .Values.config.debug | quote }}
+  ALLOWED_HOSTS: {{ .Values.config.allowedHosts | quote }}
+  DB_NAME: {{ .Values.config.db.name | quote }}
+  DB_USER: {{ .Values.config.db.user | quote }}
+  DB_HOST: {{ .Values.config.db.host | quote }}
+  DB_PORT: {{ .Values.config.db.port | quote }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ .Values.postgres.persistence.claimName }}
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    helm.sh/resource-policy: keep
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: {{ .Values.postgres.persistence.storageClassName | default "standard" | quote }}
+  resources:
+    requests:
+      storage: {{ .Values.postgres.persistence.size }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ .Values.persistence.media.claimName }}
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    helm.sh/resource-policy: keep
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: {{ .Values.persistence.storageClassName | default "standard" | quote }}
+  resources:
+    requests:
+      storage: {{ .Values.persistence.media.size }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ .Values.persistence.mlArtifacts.claimName }}
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    helm.sh/resource-policy: keep
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: {{ .Values.persistence.storageClassName | default "standard" | quote }}
+  resources:
+    requests:
+      storage: {{ .Values.persistence.mlArtifacts.size }}

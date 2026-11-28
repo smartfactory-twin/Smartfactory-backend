@@ -1,0 +1,104 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: backend-migrate
+  namespace: smartfactory
+spec:
+  backoffLimit: 3
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: migrate
+          image: smartfactory-backend:1.0
+          imagePullPolicy: Never
+          args:
+            - python
+            - manage.py
+            - migrate
+          envFrom:
+            - configMapRef:
+                name: backend-config
+            - secretRef:
+                name: backend-secret
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backend
+  namespace: smartfactory
+spec:
+  replicas: 3
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: backend
+  template:
+    metadata:
+      labels:
+        app: backend
+    spec:
+      containers:
+        - name: backend
+          image: smartfactory-backend:1.0
+          imagePullPolicy: Never
+          args:
+            - daphne
+            - -b
+            - 0.0.0.0
+            - -p
+            - "8000"
+            - core.asgi:application
+          ports:
+            - name: http
+              containerPort: 8000
+          envFrom:
+            - configMapRef:
+                name: backend-config
+            - secretRef:
+                name: backend-secret
+          volumeMounts:
+            - name: media
+              mountPath: /app/media
+            - name: ml-artifacts
+              mountPath: /app/ml/artifacts
+          startupProbe:
+            tcpSocket:
+              port: http
+            periodSeconds: 10
+            failureThreshold: 30
+          readinessProbe:
+            tcpSocket:
+              port: http
+            periodSeconds: 5
+          livenessProbe:
+            tcpSocket:
+              port: http
+            periodSeconds: 10
+      volumes:
+        - name: media
+          persistentVolumeClaim:
+            claimName: media-pvc
+        - name: ml-artifacts
+          persistentVolumeClaim:
+            claimName: ml-artifacts-pvc
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: backend
+  namespace: smartfactory
+  labels:
+    app: backend
+spec:
+  type: ClusterIP
+  selector:
+    app: backend
+  ports:
+    - name: http
+      port: 8000
+      targetPort: http
